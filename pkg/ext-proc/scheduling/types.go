@@ -1,11 +1,12 @@
 package scheduling
 
-// LLMRequest is a structured representation of the fields we parse out of the LLMRequest body.
-type LLMRequest struct {
+// Request is a structured representation of the fields we parse out of the
+// request body.
+type Request struct {
+	// Indicates whether the request is critical.
+	IsCritical bool
+	// The request's model.
 	Model string
-	// Target models is a map of target model name to weight.
-	TargetModels map[string]int
-	// Resolved target model is the final target model after traffic split.
+	// The request's final resolved target model after traffic splitting.
 	ResolvedTargetModel string
-	Critical            bool
 }

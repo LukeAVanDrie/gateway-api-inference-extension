@@ -8,6 +8,8 @@ import (
 
 	configPb "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"inference.networking.x-k8s.io/gateway-api-inference-extension/pkg/ext-proc/backend"
 	"inference.networking.x-k8s.io/gateway-api-inference-extension/pkg/ext-proc/scheduling"
 	logutil "inference.networking.x-k8s.io/gateway-api-inference-extension/pkg/ext-proc/util/logging"
@@ -50,17 +52,17 @@ func (s *Server) HandleRequestBody(reqCtx *RequestContext, req *extProcPb.Proces
 			return nil, fmt.Errorf("error getting target model name for model %v", modelObj.Name)
 		}
 	}
-	llmReq := &scheduling.LLMRequest{
+	llmReq := &scheduling.Request{
+		IsCritical:          backend.IsCritical(modelObj),
 		Model:               model,
 		ResolvedTargetModel: modelName,
-		Critical:            backend.IsCritical(modelObj),
 	}
 	klog.V(logutil.VERBOSE).Infof("LLM Request: %+v", llmReq)
-
 	requestBody := v.RequestBody.Body
-	var err error
+
 	// Update target models in the body.
 	if llmReq.Model != llmReq.ResolvedTargetModel {
+		var err error
 		rb["model"] = llmReq.ResolvedTargetModel
 		requestBody, err = json.Marshal(rb)
 		if err != nil {
@@ -70,16 +72,41 @@ func (s *Server) HandleRequestBody(reqCtx *RequestContext, req *extProcPb.Proces
 		klog.V(logutil.VERBOSE).Infof("Updated body: %v", string(requestBody))
 	}
 
+	reqCtx.Request = *llmReq
+	reqCtx.RequestSize = len(requestBody)
+
+	if s.queueController != nil {
+		sizer := scheduling.WordCountSizer{}
+		if prompt, ok := rb["prompt"].(string); ok {
+				reqCtx.QueueSize = sizer.Size(prompt)
+		} else {
+				return nil, status.Errorf(codes.InvalidArgument, "prompt field not found or not a string in request body")
+		}
+
+		// Blocks if successfully enqueued until dequeued or evicted.  A request
+		// may bypass the queue in which case, this line does not block.
+		// Returns an error if request fails to enqueue or is evicted before
+		// successful dequeue.
+		if err := s.queueController.TryEnqueue(reqCtx); err != nil {
+			klog.V(logutil.VERBOSE).InfoS("Error during TryEnqueue", "model", reqCtx.Request.Model, "error", err)
+			if errors.Is(err, scheduling.ErrTooManyFlows) || errors.Is(err, scheduling.ErrInsufficientFlowCapacity) {
+				return nil, status.Error(codes.Unavailable, "queue service unavailable")
+			}
+			if errors.Is(err, scheduling.ErrExpiredTTL) {
+				return nil, status.Error(codes.Unavailable, "request timed out in queue: ttl")
+			}
+			if stat := status.FromContextError(err); stat != nil {
+				return nil, stat.Err()
+			}
+			return nil, err // May or may not be a status error.
+		}
+	}
+
 	targetPod, err := s.scheduler.Schedule(llmReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find target pod: %w", err)
 	}
 	klog.V(logutil.VERBOSE).Infof("Selected target model %v in target pod: %v\n", llmReq.ResolvedTargetModel, targetPod)
-
-	reqCtx.Model = llmReq.Model
-	reqCtx.ResolvedTargetModel = llmReq.ResolvedTargetModel
-	reqCtx.RequestSize = len(v.RequestBody.Body)
-	reqCtx.TargetPod = targetPod
 
 	// Insert "target-pod" to instruct Envoy to route requests to the specified target pod.
 	headers := []*configPb.HeaderValueOption{

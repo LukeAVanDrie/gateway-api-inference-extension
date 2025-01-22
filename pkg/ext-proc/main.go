@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
@@ -69,7 +70,31 @@ var (
 		"refreshMetricsInterval",
 		runserver.DefaultRefreshMetricsInterval,
 		"interval to refresh metrics")
-
+	enableQueueing = flag.Bool(
+		"enableQueueing",
+		true,
+		"Enables request queueing at the extension. This is unrelated to model server queues.")
+	totalQueueCapacity = flag.Uint64(
+		"totalQueueCapacity",
+		1000,
+		"The total request count that can be queued at the extension. This does not include the model server queues. This should generally be set to the product of # models and modelQueueCapacity.")
+	modelQueueCapacity = flag.Uint64(
+		"modelQueueCapacity",
+		100,
+		"The total request count that can be queued per model at the extension. This does not include the model server queues.")
+	queueTTL = flag.Duration(
+		"queueTTL",
+		30*time.Second,
+		"TTL for queued requests")
+	queueExpiryCleanupInterval = flag.Duration(
+		"queueExpiryCleanupInterval",
+		time.Second,
+		"Interval for checking and removing expired requests from the queue")
+	watermarkPerBackend = flag.Int(
+		"watermarkPerBackend",
+		5,
+		"Desired average inflight, scheduled requests per ready backend. If not set, defaults to 5. It is required if enableQueueing is true.",
+	)
 	scheme = runtime.NewScheme()
 )
 
@@ -110,9 +135,17 @@ func main() {
 		Zone:                   *zone,
 		RefreshPodsInterval:    *refreshPodsInterval,
 		RefreshMetricsInterval: *refreshMetricsInterval,
-		Scheme:                 scheme,
-		Config:                 ctrl.GetConfigOrDie(),
-		Datastore:              datastore,
+		QueuingConfig: &runserver.QueuingConfig{
+			EnableQueueing:        *enableQueueing,
+			TotalQueueCapacity:    *totalQueueCapacity,
+			ModelQueueCapacity:    *modelQueueCapacity,
+			WatermarkPerBackend:   *watermarkPerBackend,
+			ExpiryCleanupInterval: *queueExpiryCleanupInterval,
+			QueueTTL:              *queueTTL,
+		},
+		Scheme:    scheme,
+		Config:    ctrl.GetConfigOrDie(),
+		Datastore: datastore,
 	}
 	serverRunner.Setup()
 
@@ -212,6 +245,8 @@ func metricsHandlerWithAuthenticationAndAuthorization(cfg *rest.Config) http.Han
 }
 
 func validateFlags() error {
+	flag.Parse()
+
 	if *poolName == "" {
 		return fmt.Errorf("required %q flag not set", "poolName")
 	}
@@ -220,5 +255,16 @@ func validateFlags() error {
 		return fmt.Errorf("required %q flag not set", "serviceName")
 	}
 
+	if *enableQueueing {
+		if *watermarkPerBackend < 0 {
+			return fmt.Errorf("invalid watermarkPerBackend value %d; must be non-negative", *watermarkPerBackend)
+		}
+		if *modelQueueCapacity == 0 {
+			return fmt.Errorf("invalid modelQueueCapacity value %d; must be positive", *modelQueueCapacity)
+		}
+		if *totalQueueCapacity < *modelQueueCapacity {
+			return fmt.Errorf("invalid totalQueueCapacity value %d; must be at least modelQueueCapacity", *totalQueueCapacity)
+		}
+	}
 	return nil
 }
