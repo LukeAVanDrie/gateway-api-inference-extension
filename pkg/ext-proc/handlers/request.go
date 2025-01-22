@@ -50,17 +50,17 @@ func (s *Server) HandleRequestBody(reqCtx *RequestContext, req *extProcPb.Proces
 			return nil, fmt.Errorf("error getting target model name for model %v", modelObj.Name)
 		}
 	}
-	llmReq := &scheduling.LLMRequest{
+	llmReq := &scheduling.Request{
+		IsCritical:          backend.IsCritical(modelObj),
 		Model:               model,
 		ResolvedTargetModel: modelName,
-		Critical:            backend.IsCritical(modelObj),
 	}
 	klog.V(logutil.VERBOSE).Infof("LLM Request: %+v", llmReq)
-
 	requestBody := v.RequestBody.Body
-	var err error
+
 	// Update target models in the body.
 	if llmReq.Model != llmReq.ResolvedTargetModel {
+		var err error
 		rb["model"] = llmReq.ResolvedTargetModel
 		requestBody, err = json.Marshal(rb)
 		if err != nil {
@@ -70,16 +70,24 @@ func (s *Server) HandleRequestBody(reqCtx *RequestContext, req *extProcPb.Proces
 		klog.V(logutil.VERBOSE).Infof("Updated body: %v", string(requestBody))
 	}
 
+	reqCtx.Request = *llmReq
+	reqCtx.RequestSize = len(requestBody)
+
+	if s.queueController != nil {
+		// Blocks until automatically dequeued if request is successfully enqueued.
+		if err := s.queueController.TryEnqueue(newQueuedRequestContext(reqCtx)); err != nil {
+			if errors.Is(err, scheduling.ErrInsufficientFlowCapacity) || errors.Is(err, scheduling.ErrTooManyFlows) {
+				return nil, fmt.Errorf("insufficient queue capacity: %w", scheduling.ErrBackendResourcesExhausted)
+			}
+			return nil, fmt.Errorf("error enqueueing request: %w", err)
+		}
+	}
+
 	targetPod, err := s.scheduler.Schedule(llmReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find target pod: %w", err)
 	}
 	klog.V(logutil.VERBOSE).Infof("Selected target model %v in target pod: %v\n", llmReq.ResolvedTargetModel, targetPod)
-
-	reqCtx.Model = llmReq.Model
-	reqCtx.ResolvedTargetModel = llmReq.ResolvedTargetModel
-	reqCtx.RequestSize = len(v.RequestBody.Body)
-	reqCtx.TargetPod = targetPod
 
 	// Insert "target-pod" to instruct Envoy to route requests to the specified target pod.
 	headers := []*configPb.HeaderValueOption{

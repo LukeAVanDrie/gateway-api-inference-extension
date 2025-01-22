@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"time"
@@ -17,6 +18,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
+type QueuingConfig struct {
+	EnableQueueing      bool
+	TotalQueueCapacity  uint64
+	ModelQueueCapacity  uint64
+	WatermarkPerBackend int
+}
+
 // ExtProcServerRunner provides methods to manage an external process server.
 type ExtProcServerRunner struct {
 	GrpcPort               int
@@ -27,6 +35,7 @@ type ExtProcServerRunner struct {
 	Zone                   string
 	RefreshPodsInterval    time.Duration
 	RefreshMetricsInterval time.Duration
+	QueuingConfig          *QueuingConfig
 	Scheme                 *runtime.Scheme
 	Config                 *rest.Config
 	Datastore              *backend.K8sDatastore
@@ -125,6 +134,26 @@ func (r *ExtProcServerRunner) Start(
 		pp := backend.NewProvider(podMetricsClient, podDatastore)
 		if err := pp.Init(r.RefreshPodsInterval, r.RefreshMetricsInterval); err != nil {
 			klog.Fatalf("Failed to initialize backend provider: %v", err)
+		}
+
+		// Conditionally start intitialize and start the queue controller.
+		if r.QueuingConfig.EnableQueueing {
+			qcCtx, qcCancel := context.WithCancel(context.Background())
+			rq, err := scheduling.NewFairRequestQueue(r.QueuingConfig.TotalQueueCapacity, r.QueuingConfig.ModelQueueCapacity)
+			if err != nil {
+				klog.Fatal(err, "failed to initialize request queue")
+			}
+			// TODO: try configuring optional fields to see if we can achieve better
+			// performance than the defaults.
+			qcOpts := scheduling.QueueControllerOptions{
+				WatermarkPerBackend: r.QueuingConfig.WatermarkPerBackend,
+			}
+			qc, err := scheduling.NewQueueController(rq, pp, qcOpts)
+			if err != nil {
+				klog.Fatalf("Failed to create queue controller: %v", err)
+			}
+			go qc.Run(qcCtx) // Run in a separate routine.
+			defer qcCancel()
 		}
 
 		// Register ext_proc handlers

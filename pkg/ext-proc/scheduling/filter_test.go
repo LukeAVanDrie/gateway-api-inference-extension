@@ -11,7 +11,7 @@ import (
 func TestFilter(t *testing.T) {
 	tests := []struct {
 		name   string
-		req    *LLMRequest
+		req    *Request
 		input  []*backend.PodMetrics
 		output []*backend.PodMetrics
 		err    bool
@@ -19,7 +19,7 @@ func TestFilter(t *testing.T) {
 	}{
 		{
 			name: "simple filter without successor, failure",
-			filter: &filter{filter: func(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
+			filter: &filter{filter: func(req *Request, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
 				return nil, errors.New("filter error")
 			}},
 			err: true,
@@ -27,10 +27,10 @@ func TestFilter(t *testing.T) {
 		{
 			name:   "default filter, critical request",
 			filter: defaultFilter,
-			req: &LLMRequest{
+			req: &Request{
 				Model:               "critical",
 				ResolvedTargetModel: "critical",
-				Critical:            true,
+				IsCritical:          true,
 			},
 			// pod2 will be picked because it has relatively low queue size, with the requested
 			// model being active, and has low KV cache.
@@ -89,10 +89,10 @@ func TestFilter(t *testing.T) {
 		{
 			name:   "default filter, sheddable request, accepted",
 			filter: defaultFilter,
-			req: &LLMRequest{
+			req: &Request{
 				Model:               "sheddable",
 				ResolvedTargetModel: "sheddable",
-				Critical:            false,
+				IsCritical:          false,
 			},
 			// pod1 will be picked because it has capacity for the sheddable request.
 			input: []*backend.PodMetrics{
@@ -150,10 +150,10 @@ func TestFilter(t *testing.T) {
 		{
 			name:   "default filter, sheddable request, dropped",
 			filter: defaultFilter,
-			req: &LLMRequest{
+			req: &Request{
 				Model:               "sheddable",
 				ResolvedTargetModel: "sheddable",
-				Critical:            false,
+				IsCritical:          false,
 			},
 			// All pods have higher KV cache thant the threshold, so the sheddable request will be
 			// dropped.
@@ -217,7 +217,7 @@ func TestFilterFunc(t *testing.T) {
 	tests := []struct {
 		name   string
 		f      filterFunc
-		req    *LLMRequest
+		req    *Request
 		input  []*backend.PodMetrics
 		output []*backend.PodMetrics
 		err    bool
@@ -338,7 +338,7 @@ func TestFilterFunc(t *testing.T) {
 		{
 			name: "low LoRA cost",
 			f:    toFilterFunc(lowLoRACostPredicate),
-			req: &LLMRequest{
+			req: &Request{
 				Model:               "model",
 				ResolvedTargetModel: "model",
 			},

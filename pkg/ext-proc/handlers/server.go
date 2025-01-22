@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"io"
 	"time"
 
@@ -16,28 +17,49 @@ import (
 	klog "k8s.io/klog/v2"
 )
 
-func NewServer(pp PodProvider, scheduler Scheduler, targetPodHeader string, datastore ModelDataStore) *Server {
-	return &Server{
+// ServerOption configures a Server instance during initialization.
+type ServerOption func(s *Server)
+
+func NewServer(pp PodProvider, scheduler Scheduler, targetPodHeader string, datastore ModelDataStore, opts ...ServerOption) *Server {
+	s := &Server{
 		scheduler:       scheduler,
 		podProvider:     pp,
 		targetPodHeader: targetPodHeader,
 		datastore:       datastore,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// WithQueueController sets the QueueController on the Server.
+func WithQueueController(qc QueueController) ServerOption {
+	return func(s *Server) {
+		s.queueController = qc
 	}
 }
 
 // Server implements the Envoy external processing server.
 // https://www.envoyproxy.io/docs/envoy/latest/api-v3/service/ext_proc/v3/external_processor.proto
 type Server struct {
-	scheduler   Scheduler
-	podProvider PodProvider
+	scheduler       Scheduler
+	podProvider     PodProvider
+	queueController QueueController
 	// The key of the header to specify the target pod address. This value needs to match Envoy
 	// configuration.
 	targetPodHeader string
 	datastore       ModelDataStore
 }
 
+type QueueController interface {
+	TryEnqueue(req scheduling.QueuedRequestContext) error
+	OnRequestScheduled()
+	OnRequestComplete()
+}
+
 type Scheduler interface {
-	Schedule(b *scheduling.LLMRequest) (targetPod backend.Pod, err error)
+	Schedule(r *scheduling.Request) (targetPod backend.Pod, err error)
 }
 
 // PodProvider is an interface to provide set of pods in the backend and information such as metrics.
@@ -52,10 +74,10 @@ type ModelDataStore interface {
 
 func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 	klog.V(logutil.VERBOSE).Info("Processing")
-	ctx := srv.Context()
+	ctx, cancel := context.WithCancel(srv.Context())
 	// Create request context to share states during life time of an HTTP request.
 	// See https://github.com/envoyproxy/envoy/issues/17540.
-	reqCtx := &RequestContext{}
+	reqCtx := newRequestContext(ctx, cancel)
 
 	for {
 		select {
@@ -88,6 +110,10 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 				metrics.RecordRequestSizes(reqCtx.Model, reqCtx.ResolvedTargetModel, reqCtx.RequestSize)
 			}
 			klog.V(logutil.VERBOSE).Infof("Request context after HandleRequestBody: %+v", reqCtx)
+			if s.queueController != nil {
+				s.queueController.OnRequestScheduled()
+				defer s.queueController.OnRequestComplete()
+			}
 		case *extProcPb.ProcessingRequest_ResponseHeaders:
 			resp, err = s.HandleResponseHeaders(reqCtx, req)
 			klog.V(logutil.VERBOSE).Infof("Request context after HandleResponseHeaders: %+v", reqCtx)
@@ -131,17 +157,4 @@ func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
 			return status.Errorf(codes.Unknown, "failed to send response back to Envoy: %v", err)
 		}
 	}
-}
-
-// RequestContext stores context information during the life time of an HTTP request.
-type RequestContext struct {
-	TargetPod                 backend.Pod
-	Model                     string
-	ResolvedTargetModel       string
-	RequestReceivedTimestamp  time.Time
-	ResponseCompleteTimestamp time.Time
-	RequestSize               int
-	Response                  Response
-	ResponseSize              int
-	ResponseComplete          bool
 }

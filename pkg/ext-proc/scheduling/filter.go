@@ -11,7 +11,7 @@ import (
 
 type Filter interface {
 	Name() string
-	Filter(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error)
+	Filter(req *Request, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error)
 }
 
 // filter applies current filterFunc, and then recursively applies next filters depending success or
@@ -41,7 +41,7 @@ func (f *filter) Name() string {
 	return f.name
 }
 
-func (f *filter) Filter(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
+func (f *filter) Filter(req *Request, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
 	klog.V(logutil.VERBOSE).Infof("Running filter %q on request %v with %v pods", f.name, req, len(pods))
 
 	filtered, err := f.filter(req, pods)
@@ -73,11 +73,11 @@ func (f *filter) Filter(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend
 }
 
 // filterFunc filters a set of input pods to a subset.
-type filterFunc func(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error)
+type filterFunc func(req *Request, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error)
 
 // toFilterFunc is a helper function to convert a per pod filter func to the FilterFunc.
 func toFilterFunc(pp podPredicate) filterFunc {
-	return func(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
+	return func(req *Request, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
 		filtered := []*backend.PodMetrics{}
 		for _, pod := range pods {
 			pass := pp(req, pod)
@@ -99,7 +99,7 @@ func toFilterFunc(pp podPredicate) filterFunc {
 // the least one as it gives more choices for the next filter, which on aggregate gave better
 // results.
 // TODO: Compare this strategy with other strategies such as top K.
-func leastQueuingFilterFunc(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
+func leastQueuingFilterFunc(req *Request, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
 	min := math.MaxInt
 	max := 0
 	filtered := []*backend.PodMetrics{}
@@ -121,7 +121,7 @@ func leastQueuingFilterFunc(req *LLMRequest, pods []*backend.PodMetrics) ([]*bac
 	return filtered, nil
 }
 
-func lowQueueingPodPredicate(_ *LLMRequest, pod *backend.PodMetrics) bool {
+func lowQueueingPodPredicate(_ *Request, pod *backend.PodMetrics) bool {
 	return pod.WaitingQueueSize < queueingThresholdLoRA
 }
 
@@ -131,7 +131,7 @@ func lowQueueingPodPredicate(_ *LLMRequest, pod *backend.PodMetrics) bool {
 // should consider them all instead of the absolute minimum one. This worked better than picking the
 // least one as it gives more choices for the next filter, which on aggregate gave better results.
 // TODO: Compare this strategy with other strategies such as top K.
-func leastKVCacheFilterFunc(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
+func leastKVCacheFilterFunc(req *Request, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
 	min := math.MaxFloat64
 	var max float64 = 0
 	filtered := []*backend.PodMetrics{}
@@ -154,35 +154,35 @@ func leastKVCacheFilterFunc(req *LLMRequest, pods []*backend.PodMetrics) ([]*bac
 }
 
 // podPredicate is a filter function to check whether a pod is desired.
-type podPredicate func(req *LLMRequest, pod *backend.PodMetrics) bool
+type podPredicate func(req *Request, pod *backend.PodMetrics) bool
 
 // We consider serving an adapter low cost it the adapter is active in the model server, or the
 // model server has room to load the adapter. The lowLoRACostPredicate ensures weak affinity by
 // spreading the load of a LoRA adapter across multiple pods, avoiding "pinning" all requests to
 // a single pod. This gave good performance in our initial benchmarking results in the scenario
 // where # of lora slots > # of lora adapters.
-func lowLoRACostPredicate(req *LLMRequest, pod *backend.PodMetrics) bool {
+func lowLoRACostPredicate(req *Request, pod *backend.PodMetrics) bool {
 	_, ok := pod.ActiveModels[req.ResolvedTargetModel]
 	return ok || len(pod.ActiveModels) < pod.MaxActiveModels
 }
 
 // loRAAffinityPredicate is a filter function to check whether a pod has affinity to the lora requested.
-func loRAAffinityPredicate(req *LLMRequest, pod *backend.PodMetrics) bool {
+func loRAAffinityPredicate(req *Request, pod *backend.PodMetrics) bool {
 	_, ok := pod.ActiveModels[req.ResolvedTargetModel]
 	return ok
 }
 
 // canAcceptNewLoraPredicate is a filter function to check whether a pod has room to load the adapter.
-func canAcceptNewLoraPredicate(req *LLMRequest, pod *backend.PodMetrics) bool {
+func canAcceptNewLoraPredicate(req *Request, pod *backend.PodMetrics) bool {
 	return len(pod.ActiveModels) < pod.MaxActiveModels
 }
 
-func criticalRequestPredicate(req *LLMRequest, pod *backend.PodMetrics) bool {
-	return req.Critical
+func criticalRequestPredicate(req *Request, pod *backend.PodMetrics) bool {
+	return req.IsCritical
 }
 
 func noQueueAndLessThanKVCacheThresholdPredicate(queueThreshold int, kvCacheThreshold float64) podPredicate {
-	return func(req *LLMRequest, pod *backend.PodMetrics) bool {
+	return func(req *Request, pod *backend.PodMetrics) bool {
 		return pod.WaitingQueueSize <= queueThreshold && pod.KVCacheUsagePercent <= kvCacheThreshold
 	}
 }

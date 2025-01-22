@@ -23,6 +23,9 @@ const (
 	queueingThresholdLoRA = 50
 )
 
+var ErrBackendResourcesExhausted = status.Error(codes.ResourceExhausted,
+	"dropping request due to limited backend resources")
+
 var (
 	defaultFilter = &filter{
 		name:          "critical request",
@@ -82,17 +85,15 @@ var (
 		// request to make room for critical requests.
 		nextOnFailure: &filter{
 			name: "drop request",
-			filter: func(req *LLMRequest, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
+			filter: func(req *Request, pods []*backend.PodMetrics) ([]*backend.PodMetrics, error) {
 				klog.Infof("Dropping request %v", req)
-				return []*backend.PodMetrics{}, status.Errorf(
-					codes.ResourceExhausted, "dropping request due to limited backend resources")
+				return []*backend.PodMetrics{}, ErrBackendResourcesExhausted
 			},
 		},
 	}
 )
 
 func NewScheduler(pmp PodMetricsProvider) *Scheduler {
-
 	return &Scheduler{
 		podMetricsProvider: pmp,
 		filter:             defaultFilter,
@@ -111,7 +112,7 @@ type PodMetricsProvider interface {
 }
 
 // Schedule finds the target pod based on metrics and the requested lora adapter.
-func (s *Scheduler) Schedule(req *LLMRequest) (targetPod backend.Pod, err error) {
+func (s *Scheduler) Schedule(req *Request) (targetPod backend.Pod, err error) {
 	klog.V(logutil.VERBOSE).Infof("request: %v; metrics: %+v", req, s.podMetricsProvider.AllPodMetrics())
 	pods, err := s.filter.Filter(req, s.podMetricsProvider.AllPodMetrics())
 	if err != nil || len(pods) == 0 {
