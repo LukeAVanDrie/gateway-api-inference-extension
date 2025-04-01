@@ -18,6 +18,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -28,14 +29,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datastore"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
 
-func NewServer(scheduler Scheduler, destinationEndpointHintMetadataNamespace, destinationEndpointHintKey string, datastore datastore.Datastore) *Server {
+func NewServer(queueController QueueController, destinationEndpointHintMetadataNamespace, destinationEndpointHintKey string, datastore datastore.Datastore) *Server {
 	return &Server{
-		scheduler:                                scheduler,
+		queueController:                                queueController,
 		destinationEndpointHintMetadataNamespace: destinationEndpointHintMetadataNamespace,
 		destinationEndpointHintKey:               destinationEndpointHintKey,
 		datastore:                                datastore,
@@ -45,7 +47,7 @@ func NewServer(scheduler Scheduler, destinationEndpointHintMetadataNamespace, de
 // Server implements the Envoy external processing server.
 // https://www.envoyproxy.io/docs/envoy/latest/api-v3/service/ext_proc/v3/external_processor.proto
 type Server struct {
-	scheduler Scheduler
+	queueController QueueController
 	// The key of the header to specify the target pod address. This value needs to match Envoy
 	// configuration.
 	destinationEndpointHintKey string
@@ -55,8 +57,8 @@ type Server struct {
 	datastore                                datastore.Datastore
 }
 
-type Scheduler interface {
-	Schedule(ctx context.Context, b *schedulingtypes.LLMRequest) (targetPod schedulingtypes.Pod, err error)
+type QueueController interface {
+	Schedule(req scheduling.SchedulableRequest) (targetPod schedulingtypes.Pod, evictionReason scheduling.EvictionReason, err error)
 }
 
 func (s *Server) Process(srv extProcPb.ExternalProcessor_ProcessServer) error {
@@ -217,12 +219,15 @@ func BuildErrResponse(err error) (*extProcPb.ProcessingResponse, error) {
 
 // RequestContext stores context information during the life time of an HTTP request.
 type RequestContext struct {
+	Context                   context.Context
+	CancelFunc                context.CancelFunc
 	TargetPod                 string
 	TargetEndpoint            string
 	Model                     string
 	ResolvedTargetModel       string
 	RequestReceivedTimestamp  time.Time
 	ResponseCompleteTimestamp time.Time
+	Request                   schedulingtypes.LLMRequest
 	RequestSize               int
 	Usage                     Usage
 	ResponseSize              int
@@ -254,3 +259,36 @@ const (
 	BodyResponseResponsesComplete    StreamRequestState = 6
 	TrailerResponseResponsesComplete StreamRequestState = 7
 )
+
+type schedulableRequest struct {
+	schedulingtypes.LLMRequest
+	size uint64
+	ctx  context.Context
+}
+
+func (s *schedulableRequest) Context() context.Context {
+	return s.ctx
+}
+
+func (s *schedulableRequest) Request() *schedulingtypes.LLMRequest {
+	return &s.LLMRequest
+}
+
+func (s *schedulableRequest) Size() uint64 {
+	return uint64(s.size)
+}
+
+// newSchedulableRequestFromContext creates a new schedulableRequest from a
+// RequestContext. It contains the minimal RequestContext information necessary
+// for scheduling to reduce memory in the queue.
+// It returns an error if the RequestContext is invalid.
+func newSchedulableRequestFromContext(reqCtx *RequestContext) (*schedulableRequest, error) {
+	if reqCtx == nil || reqCtx.Context == nil || reqCtx.Request.Model == "" || reqCtx.RequestSize == 0 {
+		return nil, fmt.Errorf("invalid RequestContext")
+	}
+	return &schedulableRequest{
+		ctx:        reqCtx.Context,
+		size:       uint64(reqCtx.RequestSize),
+		LLMRequest: reqCtx.Request,
+	}, nil
+}

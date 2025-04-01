@@ -160,11 +160,6 @@ func leastQueuingFilterFunc(ctx *types.Context, pods []*types.PodMetrics) ([]*ty
 	return filtered, nil
 }
 
-var lowQueueFilter = &basicFilter{
-	name:   "low queueing filter",
-	filter: toFilterFunc((queueThresholdPredicate(config.QueueingThresholdLoRA))),
-}
-
 var leastKVCacheFilter = &basicFilter{
 	name:   "least KV cache percent",
 	filter: leastKVCacheFilterFunc,

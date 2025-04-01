@@ -302,13 +302,6 @@ func stripLabelKeyAliasFromLabelMap(labels map[v1alpha2.LabelKey]v1alpha2.LabelV
 	return outMap
 }
 
-func IsCritical(model *v1alpha2.InferenceModel) bool {
-	if model.Spec.Criticality != nil && *model.Spec.Criticality == v1alpha2.Critical {
-		return true
-	}
-	return false
-}
-
 // TODO: move out to share with pod_reconciler.go
 func podIsReady(pod *corev1.Pod) bool {
 	for _, condition := range pod.Status.Conditions {

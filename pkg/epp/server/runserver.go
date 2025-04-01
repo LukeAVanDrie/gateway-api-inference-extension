@@ -50,6 +50,7 @@ type ExtProcServerRunner struct {
 	CertPath                                 string
 	UseStreaming                             bool
 	RefreshPrometheusMetricsInterval         time.Duration
+	QueueConfig                         scheduling.QueueConfig
 
 	// This should only be used in tests. We won't need this once we don't inject metrics in the tests.
 	// TODO:(https://github.com/kubernetes-sigs/gateway-api-inference-extension/issues/432) Cleanup
@@ -147,12 +148,20 @@ func (r *ExtProcServerRunner) AsRunnable(logger logr.Logger) manager.Runnable {
 			srv = grpc.NewServer()
 		}
 		var extProcServer extProcPb.ExternalProcessorServer
+		scheduler := scheduling.NewScheduler(r.Datastore)
+		queueController, err := scheduling.NewQueueController(scheduler, r.QueueConfig)
+		if err != nil {
+			logger.Error(err, "Failed setting up Scheduler")
+			return err
+		}
+		go queueController.Run(ctx)
+
 		if r.UseStreaming {
 			logger.Info("Using streaming extproc server")
-			extProcServer = handlers.NewStreamingServer(scheduling.NewScheduler(r.Datastore), r.DestinationEndpointHintMetadataNamespace, r.DestinationEndpointHintKey, r.Datastore)
+			extProcServer = handlers.NewStreamingServer(queueController, r.DestinationEndpointHintMetadataNamespace, r.DestinationEndpointHintKey, r.Datastore)
 		} else {
 			logger.Info("Using standard extproc server")
-			extProcServer = handlers.NewServer(scheduling.NewScheduler(r.Datastore), r.DestinationEndpointHintMetadataNamespace, r.DestinationEndpointHintKey, r.Datastore)
+			extProcServer = handlers.NewServer(queueController, r.DestinationEndpointHintMetadataNamespace, r.DestinationEndpointHintKey, r.Datastore)
 		}
 		extProcPb.RegisterExternalProcessorServer(
 			srv,

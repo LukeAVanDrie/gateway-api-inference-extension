@@ -19,6 +19,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -26,7 +27,7 @@ import (
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"google.golang.org/protobuf/types/known/structpb"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datastore"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -77,7 +78,7 @@ func (s *Server) HandleRequestBody(
 	llmReq := &schedulingtypes.LLMRequest{
 		Model:               model,
 		ResolvedTargetModel: modelName,
-		Critical:            datastore.IsCritical(modelObj),
+		Criticality:            *modelObj.Spec.Criticality,
 	}
 	loggerVerbose.Info("LLM request assembled", "request", llmReq)
 
@@ -94,9 +95,43 @@ func (s *Server) HandleRequestBody(
 		loggerVerbose.Info("Updated request body marshalled", "body", string(requestBody))
 	}
 
-	target, err := s.scheduler.Schedule(ctx, llmReq)
+	schedulableReq, err := newSchedulableRequestFromContext(reqCtx)
 	if err != nil {
-		return nil, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: fmt.Errorf("failed to find target pod: %w", err).Error()}
+		return nil, errutil.Error{Code: errutil.Internal, Msg: err.Error()}
+	}
+	target, evictionReason, err := s.queueController.Schedule(schedulableReq)
+	if err != nil {
+		logger.Error(err, "Failed to schedule request", "evictionReason", evictionReason.String())
+		switch {
+		case errors.Is(err, scheduling.ErrEvicted):
+			// Handle eviction errors, including the eviction reason.
+			switch evictionReason {
+			case scheduling.ReasonTTLExpiry:
+				return nil, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: fmt.Sprintf("request evicted due to TTL expiry: %v", err)}
+			case scheduling.ReasonExternalContextExpiry:
+				// TODO: determine if this is an appropriate code. For expiry due to
+				// gateway timeout, I think it makes sense. For manual cancellation, I
+				// am not certain.
+				return nil, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: fmt.Sprintf("request evicted due to external context expiry: %v", err)}
+			case scheduling.ReasonPreempted:
+				return nil, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: fmt.Sprintf("request evicted due to preemption: %v", err)}
+			case scheduling.ReasonCannotFindBackend:
+				return nil, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: fmt.Sprintf("request evicted due to failure to find a suitable backend: %v", err)}
+			default:
+				return nil, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: fmt.Sprintf("request evicted for unknown reason: %v", err)}
+			}
+		case errors.Is(err, scheduling.ErrModelAtCapacity):
+			return nil, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: fmt.Sprintf("model at capacity: %v", err)}
+		case errors.Is(err, scheduling.ErrCannotFindBackend):
+			return nil, errutil.Error{Code: errutil.Unknown, Msg: fmt.Sprintf("cannot find suitable backend for non-pool exhaustion reason: %v", err)}
+		default:
+			// Handle other errors.
+			return nil, errutil.Error{Code: errutil.Internal, Msg: fmt.Sprintf("failed to schedule request: %v", err)}
+		}
+	}
+	if target == nil || target.GetPod() == nil {
+		// This should be unreachable.
+		return nil, errutil.Error{Code: errutil.Internal, Msg: "target pod is nil, request was likely evicted"}
 	}
 	targetPod := target.GetPod()
 

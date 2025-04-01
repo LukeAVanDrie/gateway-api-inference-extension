@@ -40,6 +40,7 @@ import (
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datastore"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling"
 	runserver "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/server"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
@@ -102,6 +103,27 @@ var (
 	loraInfoMetric = flag.String("loraInfoMetric",
 		"vllm:lora_requests_info",
 		"Prometheus metric for the LoRA info metrics (must be in vLLM label format).")
+	// Scheduling config flags
+	totalQueueCapacity = flag.Uint64(
+		"totalQueueCapacity",
+		scheduling.DefaultTotalQueueCapacity,
+		"Total capacity (in bytes) of the queue across all models and criticality bands.",
+	)
+	modelQueueCapacity = flag.Uint64(
+		"modelQueueCapacity",
+		scheduling.DefaultModelQueueCapacity,
+		"Capacity (in bytes) of the per-model queues.",
+	)
+	queueTTL = flag.Duration(
+		"queueTTL",
+		scheduling.DefaultQueueTTL,
+		"TTL for requests in the queue.",
+	)
+	expiryCleanupInterval = flag.Duration(
+		"expiryCleanupInterval",
+		scheduling.DefaultExpiryCleanupInterval,
+		"Interval for cleaning up expired requests from the queue.",
+	)
 
 	setupLog = ctrl.Log.WithName("setup")
 )
@@ -180,6 +202,12 @@ func run() error {
 		CertPath:                                 *certPath,
 		UseStreaming:                             useStreamingServer,
 		RefreshPrometheusMetricsInterval:         *refreshPrometheusMetricsInterval,
+		QueueConfig: scheduling.QueueConfig{
+			TotalQueueCapacity:    *totalQueueCapacity,
+			ModelQueueCapacity:    *modelQueueCapacity,
+			QueueTTL:              *queueTTL,
+			ExpiryCleanupInterval: *expiryCleanupInterval,
+		},
 	}
 	if err := serverRunner.SetupWithManager(ctx, mgr); err != nil {
 		setupLog.Error(err, "Failed to setup ext-proc controllers")

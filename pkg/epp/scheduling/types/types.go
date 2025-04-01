@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/gateway-api-inference-extension/api/v1alpha2"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 )
 
@@ -32,7 +33,7 @@ type LLMRequest struct {
 	TargetModels map[string]int
 	// Resolved target model is the final target model after traffic split.
 	ResolvedTargetModel string
-	Critical            bool
+	Criticality         v1alpha2.Criticality
 }
 
 // Context holds contextual information during a scheduling operation.

@@ -26,9 +26,10 @@ import (
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	envutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/env"
-	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
+
+var ErrBackendsSaturated = fmt.Errorf("backend resources exhausted, cannot accommodate request")
 
 // Config holds all the configuration values for the scheduler
 type Config struct {
@@ -67,7 +68,10 @@ var config = LoadConfig()
 
 var (
 	lowLatencyFilter = &decisionTreeFilter{
-		current: lowQueueFilter,
+		// Any model server with queue length and KV cache below their respective
+		// thresholds is considered to have enough capacity to handle another
+		// request.
+		current: hasCapacityFilter,
 		nextOnSuccess: &decisionTreeFilter{
 			current: loRAAffinityFilter,
 			nextOnSuccessOrFailure: &decisionTreeFilter{
@@ -77,56 +81,34 @@ var (
 				},
 			},
 		},
-		nextOnFailure: &decisionTreeFilter{
-			current: leastQueueFilter,
-			nextOnSuccessOrFailure: &decisionTreeFilter{
-				current: loRAAffinityFilter,
-				nextOnSuccessOrFailure: &decisionTreeFilter{
-					current: leastKVCacheFilter,
-				},
-			},
-		},
-	}
-
-	sheddableRequestFilter = &decisionTreeFilter{
-		// When there is at least one model server that's not queuing requests, and still has KV
-		// cache below a certain threshold, we consider this model server has capacity to handle
-		// a sheddable request without impacting critical requests.
-		current:       hasCapacityFilter,
-		nextOnSuccess: lowLatencyFilter,
-		// If all pods are queuing or running above the KVCache threshold, we drop the sheddable
-		// request to make room for critical requests.
-		nextOnFailure: dropRequestFilter,
+		// If all pods are saturated, we cannot serve the request.
+		nextOnFailure: backendsSaturatedFilter,
 	}
 
 	hasCapacityFilter = &basicFilter{
-		name:   "has capacity for sheddable requests",
+		name:   "has capacity for requests",
 		filter: toFilterFunc(queueThresholdPredicate(config.QueueThresholdCritical).and(kvCacheThresholdPredicate(config.KVCacheThreshold))),
 	}
 
-	dropRequestFilter = &basicFilter{
-		name: "drop request",
+	backendsSaturatedFilter = &basicFilter{
+		name: "backends saturated",
 		filter: func(ctx *types.Context, pods []*types.PodMetrics) ([]*types.PodMetrics, error) {
-			ctx.Logger.V(logutil.DEFAULT).Info("Request dropped", "request", ctx.Req)
-			return []*types.PodMetrics{}, errutil.Error{
-				Code: errutil.InferencePoolResourceExhausted, Msg: "dropping request due to limited backend resources",
-			}
+			ctx.Logger.V(logutil.DEFAULT).Info("All backends are saturated, cannot accomodate request", "request", ctx.Req)
+			return []*types.PodMetrics{}, ErrBackendsSaturated
 		},
 	}
 )
 
 func NewScheduler(datastore Datastore) *Scheduler {
 	return &Scheduler{
-		datastore:              datastore,
-		criticalRequestFilter:  lowLatencyFilter,
-		sheddableRequestFilter: sheddableRequestFilter,
+		datastore: datastore,
+		filter:    lowLatencyFilter,
 	}
 }
 
 type Scheduler struct {
-	datastore              Datastore
-	criticalRequestFilter  Filter
-	sheddableRequestFilter Filter
+	datastore Datastore
+	filter    Filter
 }
 
 type Datastore interface {
@@ -143,16 +125,9 @@ func (s *Scheduler) Schedule(ctx context.Context, req *types.LLMRequest) (target
 	sCtx := types.NewContext(ctx, req, types.ToSchedulerPodMetrics(s.datastore.PodGetAll()))
 	logger.V(logutil.DEBUG).Info(fmt.Sprintf("Scheduling a request. Metrics: %+v", sCtx.PodsSnapshot))
 
-	var filter Filter
-	if req.Critical {
-		filter = s.criticalRequestFilter
-	} else {
-		filter = s.sheddableRequestFilter
-	}
-
-	pods, err := filter.Filter(sCtx, sCtx.PodsSnapshot)
+	pods, err := s.filter.Filter(sCtx, sCtx.PodsSnapshot)
 	if err != nil || len(pods) == 0 {
-		return nil, fmt.Errorf("failed to apply filter, resulted %v pods, this should never happen: %w", len(pods), err)
+		return nil, fmt.Errorf("failed to apply filter, resulted in %v pods, this should never happen: %w", len(pods), err)
 	}
 	logger.V(logutil.DEBUG).Info(fmt.Sprintf("Selecting a random pod from %d candidates: %+v", len(pods), pods))
 	i := rand.Intn(len(pods))
