@@ -25,10 +25,14 @@ import "strconv"
 type QueueOutcome int
 
 const (
+	// QueueOutcomeNotYetFinzalied indicates the request has not yet been finalized by the Flow Controller.
+	// This is an internal default value and should never be returned by `FlowController.EnqueueAndWait()`.
+	QueueOutcomeNotYetFinalized QueueOutcome = iota
+
 	// QueueOutcomeDispatched indicates the request was successfully processed by the Flow Controller and unblocked for
 	// the caller to proceed.
 	// The associated error from `FlowController.EnqueueAndWait()` will be nil.
-	QueueOutcomeDispatched QueueOutcome = iota
+	QueueOutcomeDispatched
 
 	// --- Pre-Enqueue Rejection Outcomes (request never entered a `framework.SafeQueue`) ---
 	// For these outcomes, the error from `FlowController.EnqueueAndWait()` will wrap `ErrRejected`.
@@ -72,6 +76,8 @@ const (
 // String returns a human-readable string representation of the QueueOutcome.
 func (o QueueOutcome) String() string {
 	switch o {
+	case QueueOutcomeNotYetFinalized:
+		return "NotYetFinalized"
 	case QueueOutcomeDispatched:
 		return "Dispatched"
 	case QueueOutcomeRejectedCapacity:

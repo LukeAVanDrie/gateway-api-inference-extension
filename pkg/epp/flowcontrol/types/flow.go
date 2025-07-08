@@ -21,13 +21,13 @@ package types
 // FlowSpecification defines the configuration of a logical flow, encapsulating its identity and registered priority.
 //
 // A FlowSpecification acts as the registration key for a flow within the Flow Registry.
-type FlowSpecification interface {
-	// ID returns the unique name or identifier for this flow (e.g., model name, tenant ID), corresponding to the value
-	// from `FlowControlRequest.FlowID()`.
-	ID() string
+type FlowSpecification struct {
+	// ID is the unique name or identifier for this flow (e.g., model name, tenant ID), corresponding to the value from
+	// `FlowControlRequest.FlowID()`.
+	ID string
 
-	// Priority returns the numerical priority level currently associated with this flow within the Flow Registry.
+	// Priority is the numerical priority level currently associated with this flow within the Flow Registry.
 	//
 	// Convention: Lower numerical values indicate higher priority.
-	Priority() uint
+	Priority uint
 }

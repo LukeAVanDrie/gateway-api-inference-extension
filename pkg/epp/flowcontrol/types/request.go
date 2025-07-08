@@ -86,19 +86,10 @@ type QueueItemAccessor interface {
 	// `FlowController.EnqueueAndWait()` was called.
 	EnqueueTime() time.Time
 
-	// ByteSize returns the byte size of the original request, cached from `FlowControlRequest.ByteSize()`.
-	ByteSize() uint64
-
-	// FlowID returns the unique identifier of the flow this item belongs to, cached from `FlowControlRequest.FlowID()`.
-	FlowID() string
-
 	// EffectiveTTL is the actual Time-To-Live assigned to this item by the Flow Controller, taking into account the
 	// request's preference (`FlowControlRequest.InitialEffectiveTTL()`) and any Flow Controller or per-flow
 	// defaults/policies.
 	EffectiveTTL() time.Duration
-
-	// RequestID is the user-facing ID from the original request (`FlowControlRequest.ID()`).
-	RequestID() string
 
 	// OriginalRequest returns the underlying `FlowControlRequest` that this accessor provides a view of.
 	// This method serves as an escape hatch, allowing policies or components that are aware of specific
