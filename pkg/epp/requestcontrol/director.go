@@ -235,6 +235,7 @@ func (d *Director) prepareRequest(ctx context.Context, reqCtx *handlers.RequestC
 
 	reqCtx.TargetPod = targetPods[0]
 	reqCtx.TargetEndpoint = multiEndpointString
+	reqCtx.RequestSentTimestamp = time.Now()
 
 	d.runPreRequestPlugins(ctx, reqCtx.SchedulingRequest, result)
 
@@ -256,6 +257,16 @@ func (d *Director) HandleResponseReceived(ctx context.Context, reqCtx *handlers.
 		RequestId: reqCtx.Request.Headers[requtil.RequestIdHeaderKey],
 		Headers:   reqCtx.Response.Headers,
 	}
+
+	podMetricsList := d.datastore.PodList(func(pm backendmetrics.PodMetrics) bool {
+		return pm.GetPod().NamespacedName == reqCtx.TargetPod.NamespacedName
+	})
+
+	if len(podMetricsList) == 0 {
+		logger.V(logutil.TRACE).Info("Target pod not found in datastore, skipping PostResponse plugins", "pod", reqCtx.TargetPod.NamespacedName)
+		return reqCtx, nil
+	}
+	targetPodMetrics := podMetricsList[0]
 
 	// TODO: to extend fallback functionality, handle cases where target pod is unavailable
 	// https://github.com/kubernetes-sigs/gateway-api-inference-extension/issues/1224

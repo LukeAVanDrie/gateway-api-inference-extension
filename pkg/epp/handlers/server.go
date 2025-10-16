@@ -83,6 +83,7 @@ type RequestContext struct {
 	FairnessID                string
 	ObjectiveKey              string
 	RequestReceivedTimestamp  time.Time
+	RequestSentTimestamp      time.Time // Time the request was sent to the backend pod
 	ResponseCompleteTimestamp time.Time
 	RequestSize               int
 	Usage                     Usage

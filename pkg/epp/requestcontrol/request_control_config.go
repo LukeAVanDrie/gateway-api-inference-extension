@@ -18,6 +18,7 @@ package requestcontrol
 
 import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+	rcplugins "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 )
 
 // NewConfig creates a new Config object and returns its pointer.
@@ -28,6 +29,12 @@ func NewConfig() *Config {
 		responseStreamingPlugins: []ResponseStreaming{},
 		responseCompletePlugins:  []ResponseComplete{},
 	}
+
+	// Add default plugins
+	podQueueMetricsPlugin := rcplugins.NewPodQueueMetricsPlugin()
+	config.AddPlugins(podQueueMetricsPlugin)
+
+	return config
 }
 
 // Config provides a configuration for the requestcontrol plugins.
@@ -40,7 +47,7 @@ type Config struct {
 
 // WithPreRequestPlugins sets the given plugins as the PreRequest plugins.
 // If the Config has PreRequest plugins already, this call replaces the existing plugins with the given ones.
-func (c *Config) WithPreRequestPlugins(plugins ...PreRequest) *Config {
+func (c *Config) WithPreRequestPlugins(plugins ...rcplugins.PreRequest) *Config {
 	c.preRequestPlugins = plugins
 	return c
 }
@@ -72,7 +79,7 @@ func (c *Config) WithResponseCompletePlugins(plugins ...ResponseComplete) *Confi
 
 func (c *Config) AddPlugins(pluginObjects ...plugins.Plugin) {
 	for _, plugin := range pluginObjects {
-		if preRequestPlugin, ok := plugin.(PreRequest); ok {
+		if preRequestPlugin, ok := plugin.(rcplugins.PreRequest); ok {
 			c.preRequestPlugins = append(c.preRequestPlugins, preRequestPlugin)
 		}
 		if responseReceivedPlugin, ok := plugin.(ResponseReceived); ok {

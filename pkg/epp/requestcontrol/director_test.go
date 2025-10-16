@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metadata"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+	rcplugins "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -621,6 +622,17 @@ func TestDirector_HandleResponseReceived(t *testing.T) {
 	ctx := logutil.NewTestLoggerIntoContext(context.Background())
 	ds := datastore.NewDatastore(t.Context(), nil, 0)
 	mockSched := &mockScheduler{}
+
+	// Add the target pod to the datastore.
+	targetPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod-name",
+			Namespace: "namespace1",
+		},
+		Status: corev1.PodStatus{PodIP: "192.168.1.1"},
+	}
+	ds.PodUpdateOrAddIfNotExist(targetPod)
+
 	director := NewDirectorWithConfig(ds, mockSched, &mockAdmissionController{}, NewConfig().WithResponseReceivedPlugins(pr1))
 
 	reqCtx := &handlers.RequestContext{
@@ -732,7 +744,7 @@ const (
 
 type testResponseReceived struct {
 	tn                      plugins.TypedName
-	lastRespOnResponse      *Response
+	lastRespOnResponse      *rcplugins.Response
 	lastTargetPodOnResponse string
 }
 
@@ -780,7 +792,7 @@ func (p *testResponseComplete) TypedName() plugins.TypedName {
 
 func (p *testResponseReceived) ResponseReceived(_ context.Context, _ *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
 	p.lastRespOnResponse = response
-	p.lastTargetPodOnResponse = targetPod.NamespacedName.String()
+	p.lastTargetPodOnResponse = targetPod.GetPod().GetNamespacedName().String()
 }
 
 func (p *testResponseStreaming) ResponseStreaming(_ context.Context, _ *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {

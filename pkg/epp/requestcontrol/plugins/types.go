@@ -14,7 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package requestcontrol
+package plugins
+
+import "time"
 
 // Response contains information from the response received to be passed to the Response requestcontrol plugins
 type Response struct {
@@ -28,4 +30,5 @@ type Response struct {
 	IsStreaming bool
 	// EndOfStream when true indicates that this invocation contains the last chunk of the response
 	EndOfStream bool
+	SojournTime time.Duration
 }

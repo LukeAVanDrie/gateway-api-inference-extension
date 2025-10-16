@@ -34,6 +34,7 @@ import (
 type FakePodMetrics struct {
 	Pod     *backend.Pod
 	Metrics *MetricsState
+	EWMAMetrics *EWMAMetrics
 }
 
 func (fpm *FakePodMetrics) String() string {
@@ -46,6 +47,10 @@ func (fpm *FakePodMetrics) GetPod() *backend.Pod {
 
 func (fpm *FakePodMetrics) GetMetrics() *MetricsState {
 	return fpm.Metrics
+}
+
+func (fpm *FakePodMetrics) GetEWMAMetrics() *EWMAMetrics {
+	return fpm.EWMAMetrics
 }
 
 func (fpm *FakePodMetrics) UpdatePod(pod *datalayer.PodInfo) {

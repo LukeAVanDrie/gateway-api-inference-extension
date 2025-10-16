@@ -31,7 +31,7 @@ import (
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
+	rcplugins "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -137,8 +137,8 @@ func (s *SchedulingContextState) Clone() plugins.StateData {
 
 // compile-time type assertion
 var (
-	_ framework.Scorer          = &Plugin{}
-	_ requestcontrol.PreRequest = &Plugin{}
+	_ framework.Scorer     = &Plugin{}
+	_ rcplugins.PreRequest = &Plugin{}
 )
 
 // PrefixCachePluginFactory defines the factory function for Prefix plugin.

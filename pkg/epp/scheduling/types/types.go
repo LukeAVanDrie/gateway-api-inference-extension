@@ -128,6 +128,7 @@ type Message struct {
 type Pod interface {
 	GetPod() *backend.Pod
 	GetMetrics() *backendmetrics.MetricsState
+	GetEWMAMetrics() *backendmetrics.EWMAMetrics
 	String() string
 }
 
@@ -144,17 +145,14 @@ func (pm *PodMetrics) String() string {
 	return fmt.Sprintf("%+v", *pm)
 }
 
-func (pm *PodMetrics) GetPod() *backend.Pod {
-	return pm.Pod
-}
-
-func (pm *PodMetrics) GetMetrics() *backendmetrics.MetricsState {
-	return pm.MetricsState
-}
+func (pm *PodMetrics) GetPod() *backend.Pod                        { return pm.Pod }
+func (pm *PodMetrics) GetMetrics() *backendmetrics.MetricsState    { return pm.MetricsState }
+func (pm *PodMetrics) GetEWMAMetrics() *backendmetrics.EWMAMetrics { return pm.EWMAMetrics }
 
 type PodMetrics struct {
 	*backend.Pod
 	*backendmetrics.MetricsState
+	*backendmetrics.EWMAMetrics
 }
 
 // ProfileRunResult captures the profile run result.

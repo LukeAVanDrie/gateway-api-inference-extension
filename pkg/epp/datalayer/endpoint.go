@@ -31,6 +31,7 @@ type EndpointPodState interface {
 type EndpointMetricsState interface {
 	GetMetrics() *Metrics
 	UpdateMetrics(*Metrics)
+	GetEWMAMetrics() *EWMAMetrics
 }
 
 // Endpoint represents an inference serving endpoint and its related attributes.
@@ -43,9 +44,10 @@ type Endpoint interface {
 
 // ModelServer is an implementation of the Endpoint interface.
 type ModelServer struct {
-	pod        atomic.Pointer[PodInfo]
-	metrics    atomic.Pointer[Metrics]
-	attributes *Attributes
+	pod         atomic.Pointer[PodInfo]
+	metrics     atomic.Pointer[Metrics]
+	ewmaMetrics *EWMAMetrics
+	attributes  *Attributes
 }
 
 // NewEndpoint return a new (uninitialized) ModelServer.
@@ -71,6 +73,10 @@ func (srv *ModelServer) UpdatePod(pod *PodInfo) {
 
 func (srv *ModelServer) GetMetrics() *Metrics {
 	return srv.metrics.Load()
+}
+
+func (srv *ModelServer) GetEWMAMetrics() *EWMAMetrics {
+	return srv.ewmaMetrics
 }
 
 func (srv *ModelServer) UpdateMetrics(metrics *Metrics) {

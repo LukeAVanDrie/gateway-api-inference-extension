@@ -18,6 +18,7 @@ package datalayer
 
 import (
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -61,13 +62,9 @@ func (m *Metrics) Clone() *Metrics {
 		return nil
 	}
 	activeModels := make(map[string]int, len(m.ActiveModels))
-	for key, value := range m.ActiveModels {
-		activeModels[key] = value
-	}
+	maps.Copy(activeModels, m.ActiveModels)
 	waitingModels := make(map[string]int, len(m.WaitingModels))
-	for key, value := range m.WaitingModels {
-		waitingModels[key] = value
-	}
+	maps.Copy(waitingModels, m.WaitingModels)
 	return &Metrics{
 		ActiveModels:            activeModels,
 		WaitingModels:           waitingModels,

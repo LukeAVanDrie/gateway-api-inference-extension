@@ -64,6 +64,7 @@ func (f *PodMetricsFactory) NewEndpoint(parentCtx context.Context, pod *datalaye
 	}
 	pm.pod.Store(pod)
 	pm.metrics.Store(NewMetricsState())
+	pm.ewmaMetrics = NewEWMAMetrics()
 
 	pm.startRefreshLoop(parentCtx)
 	return pm

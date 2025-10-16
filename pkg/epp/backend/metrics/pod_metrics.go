@@ -35,11 +35,12 @@ const (
 )
 
 type podMetrics struct {
-	pod      atomic.Pointer[backend.Pod]
-	metrics  atomic.Pointer[MetricsState]
-	pmc      PodMetricsClient
-	ds       datalayer.PoolInfo
-	interval time.Duration
+	pod         atomic.Pointer[backend.Pod]
+	metrics     atomic.Pointer[MetricsState]
+	ewmaMetrics *EWMAMetrics
+	pmc         PodMetricsClient
+	ds          datalayer.PoolInfo
+	interval    time.Duration
 
 	startOnce sync.Once // ensures the refresh loop goroutine is started only once
 	stopOnce  sync.Once // ensures the done channel is closed only once
@@ -56,13 +57,9 @@ func (pm *podMetrics) String() string {
 	return fmt.Sprintf("Pod: %v; Metrics: %v", pm.GetPod(), pm.GetMetrics())
 }
 
-func (pm *podMetrics) GetPod() *backend.Pod {
-	return pm.pod.Load()
-}
-
-func (pm *podMetrics) GetMetrics() *MetricsState {
-	return pm.metrics.Load()
-}
+func (pm *podMetrics) GetPod() *backend.Pod         { return pm.pod.Load() }
+func (pm *podMetrics) GetMetrics() *MetricsState    { return pm.metrics.Load() }
+func (pm *podMetrics) GetEWMAMetrics() *EWMAMetrics { return pm.ewmaMetrics }
 
 func (pm *podMetrics) UpdatePod(pod *datalayer.PodInfo) {
 	pm.pod.Store(pod)
