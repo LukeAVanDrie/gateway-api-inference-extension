@@ -59,11 +59,9 @@ func (p *PodQueueMetricsPlugin) PreRequest(
 ) {
 	targetPod := schedulingResult.ProfileResults[schedulingResult.PrimaryProfileName].TargetPods[0]
 	metrics := targetPod.GetEWMAMetrics()
-
-	arrivalTimestamp := time.Now()
-	metrics.UpdateArrivalRateEWMA(arrivalTimestamp)
+	arrivalRate := metrics.UpdateArrivalMetrics(time.Now())
 	log.FromContext(ctx).V(logutil.TRACE).Info("PodQueueMetricsPlugin.PreRequest: Updated arrival rate EWMA",
-		"pod", targetPod.GetPod().NamespacedName, "newRate", metrics.GetArrivalRateEWMA())
+		"pod", targetPod.GetPod().NamespacedName, "newRate", arrivalRate)
 }
 
 // PostResponse is called after the response is received from the backend.
@@ -75,10 +73,10 @@ func (p *PodQueueMetricsPlugin) PostResponse(
 	targetPod backendmetrics.PodMetrics,
 ) {
 	metrics := targetPod.GetEWMAMetrics()
-	metrics.UpdateSojournTimeEWMA(response.SojournTime)
+	mean, variance := metrics.UpdateSojournTimeEWMA(response.SojournTime)
 	log.FromContext(ctx).V(logutil.TRACE).Info("PodQueueMetricsPlugin.PostResponse: Updated sojourn time EWMA",
 		"pod", targetPod.GetPod().NamespacedName,
 		"sojournTime", response.SojournTime,
-		"newMean", metrics.GetMeanSojournTimeEWMA(),
-		"newVariance", metrics.GetVarianceSojournTimeEWMA())
+		"newMean", mean,
+		"newVariance", variance)
 }
