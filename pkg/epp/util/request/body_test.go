@@ -290,8 +290,7 @@ func BenchmarkExtractRequestData_Completions(b *testing.B) {
 		"prompt": "test prompt",
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := ExtractRequestBody(body)
 		if err != nil {
 			b.Fatal(err)
@@ -307,8 +306,7 @@ func BenchmarkExtractRequestData_ChatCompletions(b *testing.B) {
 		},
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := ExtractRequestBody(body)
 		if err != nil {
 			b.Fatal(err)
@@ -331,8 +329,7 @@ func BenchmarkExtractRequestData_ChatCompletionsWithOptionals(b *testing.B) {
 		"chat_template_kwargs":         map[string]any{"key": "value"},
 	}
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := ExtractRequestBody(body)
 		if err != nil {
 			b.Fatal(err)

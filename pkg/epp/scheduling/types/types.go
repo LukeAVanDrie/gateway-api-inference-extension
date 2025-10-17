@@ -93,15 +93,15 @@ func (r *CompletionsRequest) String() string {
 // API spec.
 type ChatCompletionsRequest struct {
 	/* parameters from the official OpenAI chat-completions API */
-	Messages []Message     `json:"messages,omitempty"`
-	Tools    []interface{} `json:"tools,omitempty"`
+	Messages []Message `json:"messages,omitempty"`
+	Tools    []any     `json:"tools,omitempty"`
 	/* parameters from the HuggingFace transformers chat-templates API */
-	Documents                 []interface{}          `json:"documents,omitempty"`
-	ChatTemplate              string                 `json:"chat_template,omitempty"`
-	ReturnAssistantTokensMask bool                   `json:"return_assistant_tokens_mask,omitempty"`
-	ContinueFinalMessage      bool                   `json:"continue_final_message,omitempty"`
-	AddGenerationPrompt       bool                   `json:"add_generation_prompt,omitempty"`
-	ChatTemplateKWArgs        map[string]interface{} `json:"chat_template_kwargs,omitempty"`
+	Documents                 []any          `json:"documents,omitempty"`
+	ChatTemplate              string         `json:"chat_template,omitempty"`
+	ReturnAssistantTokensMask bool           `json:"return_assistant_tokens_mask,omitempty"`
+	ContinueFinalMessage      bool           `json:"continue_final_message,omitempty"`
+	AddGenerationPrompt       bool           `json:"add_generation_prompt,omitempty"`
+	ChatTemplateKWArgs        map[string]any `json:"chat_template_kwargs,omitempty"`
 	// CacheSalt is an optional request parameter to isolate prefix caches for security reasons.
 	CacheSalt string `json:"cache_salt,omitempty"`
 }

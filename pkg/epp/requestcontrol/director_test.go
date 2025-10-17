@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"testing"
 	"time"
 
@@ -414,9 +415,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 				TargetModelName: test.targetModelName,
 			}
 			// Deep copy the body map.
-			for k, v := range test.reqBodyMap {
-				reqCtx.Request.Body[k] = v
-			}
+			maps.Copy(reqCtx.Request.Body, test.reqBodyMap)
 
 			returnedReqCtx, err := director.HandleRequest(ctx, reqCtx)
 

@@ -351,7 +351,7 @@ func TestShard_PriorityBandAccessor(t *testing.T) {
 				// Goroutine A: The Iterator (constantly reading)
 				go func() {
 					defer wg.Done()
-					for i := 0; i < 100; i++ {
+					for range 100 {
 						accessor.IterateQueues(func(queue framework.FlowQueueAccessor) bool {
 							// Accessing data should not panic or race.
 							_ = queue.FlowKey()
@@ -363,7 +363,7 @@ func TestShard_PriorityBandAccessor(t *testing.T) {
 				// Goroutine B: The Modifier (constantly writing)
 				go func() {
 					defer wg.Done()
-					for i := 0; i < 100; i++ {
+					for i := range 100 {
 						key := types.FlowKey{ID: fmt.Sprintf("new-flow-%d", i), Priority: highPriority}
 						h.synchronizeFlow(key)
 						h.shard.deleteFlow(key)

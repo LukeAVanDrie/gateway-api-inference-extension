@@ -323,7 +323,7 @@ func (fr *FlowRegistry) ShardStats() []contracts.ShardStats {
 func (fr *FlowRegistry) executeGCCycle() {
 	fr.logger.V(logging.DEBUG).Info("Starting periodic GC scan")
 	var flowCandidates []types.FlowKey
-	fr.flowStates.Range(func(key, value interface{}) bool {
+	fr.flowStates.Range(func(key, value any) bool {
 		state := value.(*flowState)
 		state.gcLock.RLock()
 		// A flow is a candidate if its lease count is zero and its idleness timeout has expired.
@@ -479,7 +479,7 @@ func (fr *FlowRegistry) executeScaleUpLocked(newTotalActive int) error {
 	// discarded, leaving the system state clean.
 	allComponents := make(map[types.FlowKey][]flowComponents)
 	var rangeErr error
-	fr.flowStates.Range(func(key, _ interface{}) bool {
+	fr.flowStates.Range(func(key, _ any) bool {
 		flowKey := key.(types.FlowKey)
 		components, err := fr.buildFlowComponents(flowKey, len(newShards))
 		if err != nil {

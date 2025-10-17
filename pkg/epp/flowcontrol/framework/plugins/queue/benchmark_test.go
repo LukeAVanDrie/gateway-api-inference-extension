@@ -94,7 +94,7 @@ func benchmarkAddPeekRemove(b *testing.B, q framework.SafeQueue) {
 
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		item := mocks.NewMockQueueItemAccessor(1, "item", benchmarkFlowKey)
 		err := q.Add(item)
 		if err != nil {
@@ -120,7 +120,7 @@ func benchmarkAddPeekRemove(b *testing.B, q framework.SafeQueue) {
 func benchmarkBulkAddThenBulkRemove(b *testing.B, q framework.SafeQueue) {
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; b.Loop(); i++ {
 		// Add a batch of items
 		items := make([]types.QueueItemAccessor, 100)
 		for j := range items {
@@ -155,7 +155,7 @@ func benchmarkAddPeekTailRemove(b *testing.B, q framework.SafeQueue) {
 
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		item := mocks.NewMockQueueItemAccessor(1, "item", benchmarkFlowKey)
 		err := q.Add(item)
 		if err != nil {

@@ -65,6 +65,7 @@ package saturationdetector
 
 import (
 	"context"
+	"maps"
 	"math"
 	"math/rand"
 	"sync"
@@ -522,9 +523,7 @@ func (d *Detector) getMetricSnapshots(pods []backendmetrics.PodMetrics) []cached
 		// Atomically update the cache with the newly fetched data.
 		if len(refreshed) > 0 {
 			d.mu.Lock()
-			for podID, snapshot := range refreshed {
-				d.cache[podID] = snapshot
-			}
+			maps.Copy(d.cache, refreshed)
 			d.mu.Unlock()
 		}
 	}

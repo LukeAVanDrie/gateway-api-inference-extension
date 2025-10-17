@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"sync"
 	"time"
 
@@ -125,9 +126,7 @@ func (s *SchedulingContextState) Clone() plugins.StateData {
 	prefixHashes := make([]BlockHash, len(s.PrefixHashes))
 	copy(prefixHashes, s.PrefixHashes)
 	prefixCacheServers := make(map[ServerID]int, len(s.PrefixCacheServers))
-	for key, value := range s.PrefixCacheServers {
-		prefixCacheServers[key] = value
-	}
+	maps.Copy(prefixCacheServers, s.PrefixCacheServers)
 
 	return &SchedulingContextState{
 		PrefixHashes:       prefixHashes,
@@ -255,7 +254,7 @@ func (p *Plugin) matchLongestPrefix(ctx context.Context, hashes []BlockHash) map
 	res := make(map[ServerID]int)
 	// Use a greedy strategy to search from the longest prefix.
 	// NOTE: It's possible to further optimize this with a binary search.
-	for i := 0; i < len(hashes); i++ {
+	for i := range hashes {
 		hash := hashes[i]
 		cachedServers := p.indexer.Get(hash)
 		if len(cachedServers) == 0 {

@@ -18,6 +18,7 @@ package datalayer
 
 import (
 	"fmt"
+	"maps"
 
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -55,9 +56,7 @@ func (p *PodInfo) Clone() *PodInfo {
 	}
 
 	clonedLabels := make(map[string]string, len(p.Labels))
-	for key, value := range p.Labels {
-		clonedLabels[key] = value
-	}
+	maps.Copy(clonedLabels, p.Labels)
 	return &PodInfo{
 		NamespacedName: types.NamespacedName{
 			Name:      p.NamespacedName.Name,

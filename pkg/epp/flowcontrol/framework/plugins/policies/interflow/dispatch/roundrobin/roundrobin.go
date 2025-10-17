@@ -104,7 +104,7 @@ func (r *iterator) selectNextQueue(band framework.PriorityBandAccessor) framewor
 	}
 
 	numFlows := len(keys)
-	for i := 0; i < numFlows; i++ {
+	for i := range numFlows {
 		currentIdx := (startIndex + i) % numFlows
 		currentKey := keys[currentIdx]
 		queue := band.Queue(currentKey.ID)

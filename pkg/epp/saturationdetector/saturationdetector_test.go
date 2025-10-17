@@ -629,7 +629,7 @@ func TestIsSaturated_ProbabilisticBehavior(t *testing.T) {
 			}
 
 			saturatedCount := 0
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				if d.IsSaturated(context.Background(), pods) {
 					saturatedCount++
 				}

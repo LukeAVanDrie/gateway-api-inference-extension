@@ -402,7 +402,7 @@ func BenchmarkPrefixPluginStress(b *testing.B) {
 func randomPrompt(n int) string {
 	runes := []rune("abcdefghijklmnopqrstuvwxyz")
 	var sb strings.Builder
-	for i := 0; i < n; i++ {
+	for range n {
 		sb.WriteRune(runes[rand.Intn(len(runes))])
 	}
 	return sb.String()
@@ -468,7 +468,7 @@ func BenchmarkPrefixPluginChatCompletionsStress(b *testing.B) {
 			}
 
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				// Benchmark the scoring operation
 				scores := plugin.Score(context.Background(), types.NewCycleState(), req, pods)
 				_ = scores // Use the result to prevent optimization

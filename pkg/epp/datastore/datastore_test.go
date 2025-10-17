@@ -318,8 +318,7 @@ func TestMetrics(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			// Set up the scheme.
 			scheme := runtime.NewScheme()
 			_ = clientgoscheme.AddToScheme(scheme)

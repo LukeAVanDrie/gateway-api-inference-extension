@@ -168,8 +168,8 @@ func parseRespForUsage(ctx context.Context, responseText string) ResponseBody {
 	response := ResponseBody{}
 	logger := log.FromContext(ctx)
 
-	lines := strings.Split(responseText, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(responseText, "\n")
+	for line := range lines {
 		if !strings.HasPrefix(line, streamingRespPrefix) {
 			continue
 		}
