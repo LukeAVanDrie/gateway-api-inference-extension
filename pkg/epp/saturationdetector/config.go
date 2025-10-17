@@ -23,8 +23,8 @@ import (
 // Default configuration values for the SaturationDetector's P-controller.
 const (
 	// DefaultTargetUtilization is the default goal state (Setpoint) for the P-controller.
-	// A value of 0.85 means the system aims to keep the aggregate backend utilization at 85%,
-	// leaving a 15% buffer to absorb variance and prevent latency spikes.
+	// A value of 0.85 means the system aims to keep the aggregate backend utilization at 85%, leaving a 15% buffer to
+	// absorb variance and prevent latency spikes.
 	DefaultTargetUtilization = 0.85
 
 	// DefaultProportionalGain (Kp) is the default tuning constant for the P-controller.
@@ -33,8 +33,13 @@ const (
 	// - If error = 0.05 (5% capacity available below target), dispatch probability = 0.5.
 	DefaultProportionalGain = 10.0
 
-	// DefaultCachingTTL is the default duration for which the detector's internal cache of pod metrics
-	// is considered valid. 100ms is a balance between data freshness and reducing lock contention.
+	// DefaultMinDispatchPolicy is the default minimum dispatch probability.
+	// A value of 1% ensures that even when the P-controller deems the system fully saturated, at least 1% of requests are
+	// still allowed through to continuously probe backend capacity.
+	DefaultMinDispatchPolicy = 0.01
+
+	// DefaultCachingTTL is the default duration for which the detector's internal cache of pod metrics is considered
+	// valid. 100ms is a balance between data freshness and reducing lock contention.
 	DefaultCachingTTL = 100 * time.Millisecond
 )
 
@@ -52,6 +57,14 @@ type Config struct {
 	// A higher value leads to a faster but potentially less stable response. Must be non-negative.
 	// Optional: Defaults to DefaultProportionalGain.
 	ProportionalGain float64
+
+	// MinDispatchProbability is the minimum probability of dispatch, acting as a "leaky bucket".
+	// This ensures that a small amount of traffic always flows, allowing the system to continuously probe backend
+	// capacity and preventing a "metrics freeze" deadlock (e.g., during cold starts).
+	// Must be between 0.0 and 1.0.
+	// A small value (e.g., 0.01 for 1%) is recommended. If 0, the P-controller can completely stop traffic.
+	// Optional: Defaults to DefaultMinDispatchPolicy.
+	MinDispatchProbability float64
 
 	// CachingTTL is the duration for which the detector's internal cache of pod metrics is considered valid.
 	// This value represents a direct trade-off between data freshness and performance (lock contention).
@@ -72,6 +85,9 @@ func (c *Config) ValidateAndApplyDefaults() (*Config, error) {
 	if cfg.ProportionalGain == 0 {
 		cfg.ProportionalGain = DefaultProportionalGain
 	}
+	if cfg.MinDispatchProbability == 0 {
+		cfg.MinDispatchProbability = DefaultMinDispatchPolicy
+	}
 	if cfg.CachingTTL == 0 {
 		cfg.CachingTTL = DefaultCachingTTL
 	}
@@ -82,6 +98,9 @@ func (c *Config) ValidateAndApplyDefaults() (*Config, error) {
 	}
 	if cfg.ProportionalGain < 0 {
 		return nil, fmt.Errorf("ProportionalGain cannot be negative, but got %f", cfg.ProportionalGain)
+	}
+	if cfg.MinDispatchProbability < 0 || cfg.MinDispatchProbability > 1.0 {
+		return nil, fmt.Errorf("MinDispatchProbability must be between 0.0 and 1.0, but got %f", cfg.MinDispatchProbability)
 	}
 	if cfg.CachingTTL <= 0 {
 		return nil, fmt.Errorf("CachingTTL must be a positive duration, but got %v", cfg.CachingTTL)

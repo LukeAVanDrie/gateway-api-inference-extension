@@ -53,6 +53,10 @@ limitations under the License.
 //     This model is chosen because the 'G' (General distribution) correctly accounts for the high-variance service times
 //     inherent in LLM workloads.
 //
+//  3. Leaky Bucket (Deadlock Prevention):
+//     A minimum dispatch probability ensures a small amount of traffic always flows, allowing the system to
+//     continuously probe backend capacity and preventing a "metrics freeze" deadlock.
+//
 // # Architectural Impact
 //
 // These models are used to generate a unified FullnessReport that serves:
@@ -234,9 +238,10 @@ type cachedPodMetrics struct {
 // NewDetector creates a new SaturationDetector.
 func NewDetector(config Config, logger logr.Logger) *Detector {
 	logger.V(logutil.DEFAULT).WithName("SaturationDetector").Info(
-		"Creating new P-Controller SaturationDetector with internal TTL cache",
+		"Creating new P-Controller SaturationDetector",
 		"targetUtilization", config.TargetUtilization,
 		"proportionalGain (Kp)", config.ProportionalGain,
+		"minDispatchProbability", config.MinDispatchProbability,
 		"cachingTTL", config.CachingTTL.String())
 
 	// Initialize the random source. We use a local source rather than the global one.
@@ -339,29 +344,44 @@ func (d *Detector) GetFullnessReport(ctx context.Context, candidatePods []backen
 //
 // As the system approaches its target utilization, this probability smoothly decreases, effectively throttling the rate
 // of new requests proactively.
+//
+// # Control Logic
+//
+// The decision integrates these additional mechanisms:
+//
+// 1. Leaky Bucket (Deadlock Prevention): Ensures the DispatchProbability never falls below MinDispatchProbability.
 func (d *Detector) IsSaturated(ctx context.Context, candidatePods []backendmetrics.PodMetrics) bool {
+	// 1. Generate the Fullness Report (P-Controller State).
 	report := d.GetFullnessReport(ctx, candidatePods)
 	dispatchProbability := report.ControllerInternals.DispatchProbability
 
+	// 2. Apply Leaky Bucket (MinDispatchProbability).
+	leakyBucketApplied := false
+	if d.config.MinDispatchProbability > 0 && dispatchProbability < d.config.MinDispatchProbability {
+		dispatchProbability = d.config.MinDispatchProbability
+		leakyBucketApplied = true
+	}
+
+	// 3. Apply P-Controller Probabilistic Decision.
 	// We must lock the RNG as math/rand.Rand (with local source) is not safe for concurrent use.
 	d.randMu.Lock()
 	randVal := d.rand.Float64()
 	d.randMu.Unlock()
 
-	// If the random number is greater than or equal to the dispatch probability, the request is throttled.
-	isSaturated := randVal >= dispatchProbability
+	// If the random number is >= the dispatch probability, the P-controller throttles the request.
+	pControllerThrottles := randVal >= dispatchProbability
 
 	// Observability: Log the internal state of the P-controller at trace level for tuning.
-	log.FromContext(ctx).V(logutil.TRACE).Info("P-Controller Decision",
-		"isSaturated", isSaturated,
+	log.FromContext(ctx).V(logutil.TRACE).Info("P-Controller Evaluation",
+		"throttledByPController", pControllerThrottles,
 		"subsetUtilization", report.SubsetUtilization,
 		"targetUtilization", report.ControllerInternals.TargetUtilization,
-		"errorSignal", report.ControllerInternals.ErrorSignal,
-		"Kp", d.config.ProportionalGain,
-		"dispatchProbability", dispatchProbability,
+		"calculatedProbability", report.ControllerInternals.DispatchProbability,
+		"finalProbability", dispatchProbability,
+		"leakyBucketApplied", leakyBucketApplied,
 	)
 
-	return isSaturated
+	return pControllerThrottles
 }
 
 // calculatePControllerOutput implements the core logic of the P-controller.

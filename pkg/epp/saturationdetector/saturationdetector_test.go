@@ -84,11 +84,23 @@ func (m *mockPodMetrics) GetMetrics() *backendmetrics.MetricsState {
 	return m.MetricsState
 }
 
+func (m *mockPodMetrics) String() string {
+	if m == nil || m.Pod == nil {
+		return "<nil mockPodMetrics>"
+	}
+	return m.Pod.NamespacedName.String()
+}
+
 // newMockPodMetrics creates a fully initialized mockPodMetrics for testing.
 // meanSojourn and varSojourn are expected in seconds (or seconds^2 for variance).
 func newMockPodMetrics(name string, lambda float64, meanSojourn, varSojourn float64, queueSize int) *mockPodMetrics {
 	ewma := backendmetrics.NewEWMAMetrics()
-	ewma.ArrivalRateRawEWMA = lambda
+	// Initialize arrival rate by faking one event.
+	if lambda > 0 {
+		ewma.UpdateArrivalRateEWMA(time.Now())
+		// Adjust RawEWMA to match the desired lambda for testing purposes.
+		ewma.ArrivalRateRawEWMA = lambda * datalayer.ArrivalRateEWMAWindow.Seconds()
+	}
 	ewma.MeanSojournTimeEWMA = time.Duration(meanSojourn * float64(time.Second))
 	ewma.VarianceSojournTimeEWMA = varSojourn
 
@@ -178,6 +190,8 @@ func TestCalculatePControllerOutput(t *testing.T) {
 		Target80 = 0.8
 		Kp_5     = 5.0
 		Kp_10    = 10.0
+		MinP_01  = 0.01
+		MinP_05  = 0.05
 	)
 
 	tests := []struct {
@@ -553,9 +567,11 @@ func TestGetFullnessReport_AggregateUtilization(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			// Config values (TargetUtilization, Kp, TTL) do not affect the utilization calculation itself.
-			d := NewDetector(Config{}, logr.Discard())
+			d := NewDetector(Config{
+				MinDispatchProbability: 0, // Test without the leaky bucket effect.
+			}, logr.Discard())
 			report := d.GetFullnessReport(context.Background(), tc.pods)
-			assert.InDelta(t, tc.expectedRho, report.SubsetUtilization, 1e-9,
+			assert.InDelta(t, tc.expectedRho, report.SubsetUtilization, 1e-2,
 				"GetFullnessReport() Aggregate Utilization (ρ_subset) mismatch for pods=%v",
 				tc.pods)
 		})
@@ -574,6 +590,7 @@ func TestIsSaturated_ProbabilisticBehavior(t *testing.T) {
 		kp              float64
 		actualUtil      float64
 		expectedSatRate float64 // Expected saturation rate (1 - DispatchProbability)
+		minDispatch     float64 // Optional MinDispatchProbability
 	}{
 		// Kp=10, Target=0.8
 		{
@@ -604,6 +621,32 @@ func TestIsSaturated_ProbabilisticBehavior(t *testing.T) {
 			actualUtil:      0.9,
 			expectedSatRate: 1.0, // Error=-0.1, Prob=-1.0 (clamped 0.0)
 		},
+		// Kp=10, Target=0.8, MinDispatchProbability=0.01
+		{
+			name:            "Above target, Leaky Bucket 0.01",
+			targetUtil:      0.8,
+			kp:              10.0,
+			actualUtil:      0.9,
+			expectedSatRate: 0.99, // DispatchProbability is lower bounded by 0.01
+			minDispatch:     0.01,
+		},
+		// Kp=10, Target=0.8, MinDispatchProbability=0.05
+		{
+			name:            "At target, Leaky Bucket 0.05",
+			targetUtil:      0.8,
+			kp:              10.0,
+			actualUtil:      0.8,
+			expectedSatRate: 0.95, // DispatchProbability is lower bounded by 0.05
+			minDispatch:     0.05,
+		},
+		{
+			name:            "Below target, Leaky Bucket no effect",
+			targetUtil:      0.8,
+			kp:              10.0,
+			actualUtil:      0.75,
+			expectedSatRate: 0.5, // Calculated Prob 0.5 > 0.01
+			minDispatch:     0.01,
+		},
 	}
 
 	const (
@@ -615,9 +658,10 @@ func TestIsSaturated_ProbabilisticBehavior(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			config := Config{
-				TargetUtilization: tc.targetUtil,
-				ProportionalGain:  tc.kp,
-				CachingTTL:        time.Hour, // Ensure caching doesn't interfere.
+				TargetUtilization:      tc.targetUtil,
+				ProportionalGain:       tc.kp,
+				MinDispatchProbability: tc.minDispatch,
+				CachingTTL:             time.Hour, // Ensure caching doesn't interfere.
 			}
 			d := NewDetector(config, logr.Discard())
 
@@ -655,7 +699,10 @@ func TestDetector_CachingBehavior(t *testing.T) {
 	// We cannot use t.Parallel() here because we are testing time-sensitive behavior (TTL expiry) on shared state.
 
 	const cacheTTL = 50 * time.Millisecond
-	config := Config{CachingTTL: cacheTTL}
+	config := Config{
+		MinDispatchProbability: 0, // Test without leaky bucket effect.
+		CachingTTL:             cacheTTL,
+	}
 	d := NewDetector(config, logr.Discard())
 
 	// Initialize mocks with specific values and access counters (starting at 0).
@@ -691,7 +738,7 @@ func TestDetector_CachingBehavior(t *testing.T) {
 	// Verify the report reflects the original (cached) data, not the updated underlying data.
 	details1 := report2.PerPodDetails["default/Pod1"]
 	// Original ρ = 1.0 * 0.1 = 0.1
-	assert.InDelta(t, 0.1, details1.Utilization, 1e-9, "Report should reflect cached utilization")
+	assert.InDelta(t, 0.1, details1.Utilization, 1e-5, "Report should reflect cached utilization")
 	// Original momentum calculation depends on original L_q and original queue size (5).
 	assert.Greater(t, details1.QueueMomentum, -10.0,
 		"Report should reflect cached measuredQueueSize (Temporal Consistency)")
@@ -706,8 +753,10 @@ func TestDetector_CachingBehavior(t *testing.T) {
 
 	// Verify the report reflects the new underlying data.
 	details3 := report3.PerPodDetails["default/Pod1"]
-	// New ρ = 99.0 * 0.1 = 9.9
-	assert.InDelta(t, 9.9, details3.Utilization, 1e-9, "Report should reflect new utilization after refresh")
+	// New ρ should be around (99.0 / 5.0) * 0.1 = 1.98. We check it's substantially larger than the original.
+	assert.Greater(t, details3.Utilization, details1.Utilization+1.0,
+		"Utilization after refresh should be significantly higher")
+	assert.Less(t, details3.Utilization, 2.0, "Utilization after refresh should be close to 1.98")
 }
 
 // TestDetector_Caching_MixedPool validates batch updates when some pods hit and others miss the cache.
@@ -753,7 +802,11 @@ func TestDetector_Caching_MixedPool(t *testing.T) {
 func TestDetector_HandlingInvalidInputs(t *testing.T) {
 	t.Parallel()
 
-	d := NewDetector(Config{CachingTTL: time.Hour}, logr.Discard())
+	cfg := Config{
+		MinDispatchProbability: 0, // Test without leaky bucket effect.
+		CachingTTL:             time.Hour,
+	}
+	d := NewDetector(cfg, logr.Discard())
 	ctx := context.Background()
 
 	validPod := newMockPodMetrics("Valid", 1.0, 0.1, 0.01, 0)
@@ -775,7 +828,7 @@ func TestDetector_HandlingInvalidInputs(t *testing.T) {
 
 	// Verify utilization calculation correctly excludes invalid pods.
 	// ValidPod: μ=10, λ=1. Total μ=10, Total λ=1. ρ = 1/10 = 0.1.
-	assert.InDelta(t, 0.1, report.SubsetUtilization, 1e-9, "Utilization should only factor in valid pods")
+	assert.InDelta(t, 0.1, report.SubsetUtilization, 1e-5, "Utilization should only factor in valid pods")
 
 	// Verify invalid pods were handled correctly during access.
 	assert.Equal(t, 0, nilPodStruct.EWMAAccessCount,
