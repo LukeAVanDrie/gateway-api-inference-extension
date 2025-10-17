@@ -17,14 +17,20 @@ limitations under the License.
 package datalayer
 
 import (
+	"math"
 	"sync"
 	"time"
 )
 
 const (
-	// EWMAAlpha is the smoothing factor for the Exponentially Weighted Moving Average.
-	// A value of 0.1 provides a good balance between responsiveness to recent changes and stability against noise.
+	// EWMAAlpha is the smoothing factor for the Sojourn Time Mean and Variance Exponentially Weighted Moving Averages.
+	// A value of 0.1 provides a good balance between responsiveness and noise reduction.
 	EWMAAlpha = 0.1
+
+	// ArrivalRateEWMAWindow defines the effective time window over which the arrival rate EWMA is calculated.
+	// The rate decays automatically over time. A shorter window is more responsive but noisier.
+	// 5 seconds is a reasonable default for stabilizing the arrival rate signal.
+	ArrivalRateEWMAWindow = 5 * time.Second
 )
 
 // EWMAMetrics holds calculated Exponentially Weighted Moving Average metrics for a pod.
@@ -34,19 +40,16 @@ type EWMAMetrics struct {
 	mu sync.RWMutex
 
 	// --- Sojourn Time Metrics (Effective Service Time) ---
-	MeanSojournTimeEWMA     time.Duration // E[S]. EWMA of the mean sojourn time.
-	VarianceSojournTimeEWMA float64       // Var(S). EWMA of the variance of sojourn time (in seconds squared).
-	m2SojournTimeEWMA       float64       // Internal state for EWMV calculation (Welford's adaptation).
-	sojournTimeSamples      int64         // Count of samples contributing to the current EWMA.
+	// Calculated using standard EWMA and Welford's method adapted for EWMA.
+	MeanSojournTimeEWMA     time.Duration // EWMA of the mean sojourn time (E[S])
+	VarianceSojournTimeEWMA float64       // EWMA of the variance of sojourn time (Var[S], in seconds squared)
+	m2SojournTimeEWMA       float64       // Internal state for Welford's method (sum of squares of differences)
+	sojournTimeSamples      int64         // Count of samples contributing to the current EWMA
 
-	// --- Arrival Rate Metrics ---
-	// We track the EWMA of the *inter-arrival times* (E[T]) rather than the instantaneous rates (1/T).
-	// This is mathematically more robust against high variance, preventing short bursts (T->0) from causing massive
-	// spikes (1/T->∞) in the EWMA. The arrival rate (λ) is derived as 1 / E[T].
-	MeanInterArrivalTimeEWMA time.Duration // E[T]. EWMA of the time between arrivals.
-	ArrivalRateEWMA          float64       // λ = 1 / E[T] (requests per second).
-	lastArrivalTime          time.Time     // Timestamp of the previous arrival.
-	arrivalSamples           int64
+	// --- Arrival Rate Metrics (Time-Aware Decaying EWMA) ---
+	// Calculated using a time-aware decaying EWMA to ensure the rate decays when arrivals stop (preventing lockout).
+	ArrivalRateRawEWMA float64   // Raw EWMA value (weighted count)
+	lastRateUpdate     time.Time // Timestamp of the last update (arrival event)
 }
 
 // NewEWMAMetrics creates a new EWMAMetrics instance.
@@ -54,73 +57,58 @@ func NewEWMAMetrics() *EWMAMetrics {
 	return &EWMAMetrics{}
 }
 
-// UpdateArrivalMetrics updates the EWMA of the inter-arrival time and recalculates the arrival rate.
+// UpdateArrivalRateEWMA updates the arrival rate using a time-aware decaying EWMA.
 // This should be called immediately upon a request being dispatched to the pod (PreRequest hook).
 // It returns the newly calculated arrival rate (λ) for safe logging.
-func (m *EWMAMetrics) UpdateArrivalMetrics(now time.Time) float64 {
+func (m *EWMAMetrics) UpdateArrivalRateEWMA(now time.Time) float64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.arrivalSamples++
-
-	if !m.lastArrivalTime.IsZero() {
-		interArrivalTime := now.Sub(m.lastArrivalTime)
-
-		// Update Mean Inter-Arrival Time EWMA (E[T]).
-		if m.arrivalSamples <= 1 {
-			m.MeanInterArrivalTimeEWMA = interArrivalTime
-		} else {
-			// Standard EWMA formula applied to the inter-arrival time.
-			// NewMean = OldMean + Alpha * (NewValue - OldMean)
-			delta := interArrivalTime - m.MeanInterArrivalTimeEWMA
-			m.MeanInterArrivalTimeEWMA += time.Duration(float64(delta) * EWMAAlpha)
-		}
-
-		// Recalculate Arrival Rate (λ = 1 / E[T]).
-		meanIATSeconds := m.MeanInterArrivalTimeEWMA.Seconds()
-		if meanIATSeconds > 1e-9 { // Avoid division by zero or extremely small intervals.
-			m.ArrivalRateEWMA = 1.0 / meanIATSeconds
-		}
-		// If E[T] is effectively zero (e.g., massive burst), the rate is very high. We retain the previous rate or let it
-		// remain 0 if the system is cold, avoiding infinities.
+	// The weight (increment) added by a single new request.
+	const increment = 1.0
+	var currentRaw float64
+	if !m.lastRateUpdate.IsZero() {
+		currentRaw = m.getDecayedRawRateLocked(now)
 	}
 
-	m.lastArrivalTime = now
-	return m.ArrivalRateEWMA
+	// Apply decay and add the increment for the new arrival.
+	// Raw_new = Raw_old * decay + increment
+	m.ArrivalRateRawEWMA = currentRaw + increment
+	m.lastRateUpdate = now
+	return m.normalizeRate(m.ArrivalRateRawEWMA)
 }
 
-// UpdateSojournTimeEWMA updates the EWMA of the mean and variance of sojourn time using an adaptation of Welford's
-// method (EWMVar).
+// UpdateSojournTimeEWMA updates the EWMA of the mean and variance of sojourn time.
+// It uses Welford's method adapted for EWMA for numerical stability.
 // This should be called immediately after a response is received from the pod (PostResponse hook).
 // It returns the newly calculated mean (E[S]) and variance (Var(S)) for safe logging.
 func (m *EWMAMetrics) UpdateSojournTimeEWMA(sojournTime time.Duration) (time.Duration, float64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	m.sojournTimeSamples++
 	stSeconds := sojournTime.Seconds()
 
 	if m.sojournTimeSamples == 1 {
-		// Initialize state on the first sample.
+		// Initialize EWMA with the first sample.
 		m.MeanSojournTimeEWMA = sojournTime
 		m.m2SojournTimeEWMA = 0
 		m.VarianceSojournTimeEWMA = 0
 		return m.MeanSojournTimeEWMA, m.VarianceSojournTimeEWMA
 	}
 
-	// 1. Update Mean EWMA (E[S]).
-	// Formula: NewMean = OldMean + Alpha * (NewValue - OldMean)
+	// Update Mean EWMA.
+	// NewMean = OldMean + α*(NewSample - OldMean)
 	delta := stSeconds - m.MeanSojournTimeEWMA.Seconds()
 	newMeanSeconds := m.MeanSojournTimeEWMA.Seconds() + EWMAAlpha*delta
 	m.MeanSojournTimeEWMA = time.Duration(newMeanSeconds * float64(time.Second))
 
-	// 2. Update Variance EWMA (Var(S)).
-	// Formula: EWMV = (1-Alpha) * EWMV_{old} + Alpha * (x_n - Mean_{old}) * (x_n - Mean_{new})
+	// Update Variance EWMA (Welford's adapted method).
+	// M2_new = (1-α)*M2_old + α*(x_k - M_{k-1})*(x_k - M_k)
+	// where delta = (x_k - M_{k-1}) and delta2 = (x_k - M_k)
 	delta2 := stSeconds - newMeanSeconds
 	m.m2SojournTimeEWMA = (1-EWMAAlpha)*m.m2SojournTimeEWMA + EWMAAlpha*delta*delta2
-	// Variance is represented by M2 in this EWMA adaptation.
+	// The variance estimate is the smoothed M2 value.
 	m.VarianceSojournTimeEWMA = m.m2SojournTimeEWMA
-
 	return m.MeanSojournTimeEWMA, m.VarianceSojournTimeEWMA
 }
 
@@ -131,16 +119,56 @@ func (m *EWMAMetrics) GetMeanSojournTimeEWMA() time.Duration {
 	return m.MeanSojournTimeEWMA
 }
 
-// GetVarianceSojournTimeEWMA returns the EWMA of the variance of sojourn time (Var(S)).
+// GetVarianceSojournTimeEWMA returns the EWMA of the variance of sojourn time (Var[S]).
 func (m *EWMAMetrics) GetVarianceSojournTimeEWMA() float64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// Ensure variance is non-negative (can slightly dip below zero due to floating point inaccuracies).
+	if m.VarianceSojournTimeEWMA < 0 {
+		return 0
+	}
 	return m.VarianceSojournTimeEWMA
 }
 
-// GetArrivalRateEWMA returns the EWMA of the arrival rate (λ).
+// GetArrivalRateEWMA returns the current EWMA of the arrival rate (λ) in requests per second.
+// It calculates the decayed rate based on the current time before returning the value.
 func (m *EWMAMetrics) GetArrivalRateEWMA() float64 {
+	// We use RLock.
+	// We calculate the decayed rate without updating the internal state (ArrivalRateRawEWMA, lastRateUpdate).
+	// This is a standard pattern for implementing decaying counters efficiently in concurrent systems, prioritizing read
+	// performance.
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.ArrivalRateEWMA
+	decayedRawRate := m.getDecayedRawRateLocked(time.Now())
+	return m.normalizeRate(decayedRawRate)
+}
+
+// getDecayedRawRateLocked calculates the current decayed raw rate.
+// It MUST be called under at least a read lock.
+func (m *EWMAMetrics) getDecayedRawRateLocked(now time.Time) float64 {
+	// Optimization: If the rate is zero or uninitialized, return 0.
+	if m.ArrivalRateRawEWMA == 0 || m.lastRateUpdate.IsZero() {
+		return 0
+	}
+
+	// Safety check in case window is configured near zero (should be prevented by config validation).
+	window := ArrivalRateEWMAWindow.Seconds()
+	if window <= 1e-9 {
+		return m.ArrivalRateRawEWMA
+	}
+
+	// Calculate decay factor based on elapsed time (ΔT) and the configured window (W).
+	// decay = exp(-ΔT / W)
+	timeSinceLastUpdate := now.Sub(m.lastRateUpdate).Seconds()
+	decay := math.Exp(-timeSinceLastUpdate / window)
+	return m.ArrivalRateRawEWMA * decay
+}
+
+// normalizeRate converts the raw decayed value to requests per second.
+func (m *EWMAMetrics) normalizeRate(rawRate float64) float64 {
+	window := ArrivalRateEWMAWindow.Seconds()
+	if window <= 1e-9 {
+		return 0 // Avoid division by zero.
+	}
+	return rawRate / window
 }

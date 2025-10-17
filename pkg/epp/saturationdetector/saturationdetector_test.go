@@ -88,7 +88,7 @@ func (m *mockPodMetrics) GetMetrics() *backendmetrics.MetricsState {
 // meanSojourn and varSojourn are expected in seconds (or seconds^2 for variance).
 func newMockPodMetrics(name string, lambda float64, meanSojourn, varSojourn float64, queueSize int) *mockPodMetrics {
 	ewma := backendmetrics.NewEWMAMetrics()
-	ewma.ArrivalRateEWMA = lambda
+	ewma.ArrivalRateRawEWMA = lambda
 	ewma.MeanSojournTimeEWMA = time.Duration(meanSojourn * float64(time.Second))
 	ewma.VarianceSojournTimeEWMA = varSojourn
 
@@ -681,7 +681,7 @@ func TestDetector_CachingBehavior(t *testing.T) {
 
 	// 2. Subsequent Call (Cache Hit)
 	// Update the underlying metrics to ensure the cached values are returned if the cache works.
-	pod1.EWMAMetrics.ArrivalRateEWMA = 99.0
+	pod1.EWMAMetrics.ArrivalRateRawEWMA = 99.0
 	pod1.MetricsState.WaitingQueueSize = 99
 
 	report2 := d.GetFullnessReport(ctx, pods)

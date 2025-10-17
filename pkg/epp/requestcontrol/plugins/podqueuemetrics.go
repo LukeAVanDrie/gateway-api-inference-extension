@@ -59,7 +59,7 @@ func (p *PodQueueMetricsPlugin) PreRequest(
 ) {
 	targetPod := schedulingResult.ProfileResults[schedulingResult.PrimaryProfileName].TargetPods[0]
 	metrics := targetPod.GetEWMAMetrics()
-	arrivalRate := metrics.UpdateArrivalMetrics(time.Now())
+	arrivalRate := metrics.UpdateArrivalRateEWMA(time.Now())
 	log.FromContext(ctx).V(logutil.TRACE).Info("PodQueueMetricsPlugin.PreRequest: Updated arrival rate EWMA",
 		"pod", targetPod.GetPod().NamespacedName, "newRate", arrivalRate)
 }
