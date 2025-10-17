@@ -97,6 +97,18 @@ func (ds *mockDatastore) PodList(predicate func(backendmetrics.PodMetrics) bool)
 func TestDirector_HandleRequest(t *testing.T) {
 	ctx := logutil.NewTestLoggerIntoContext(context.Background())
 
+	// Helper to create PodMetrics for scheduler results
+	createSchedPod := func(name string, addr string) schedulingtypes.Pod {
+		return &schedulingtypes.PodMetrics{
+			Pod: &backend.Pod{
+				Address:        addr,
+				NamespacedName: types.NamespacedName{Name: name, Namespace: "default"},
+			},
+			MetricsState: backendmetrics.NewMetricsState(),
+			EWMAMetrics:  backendmetrics.NewEWMAMetrics(),
+		}
+	}
+
 	// --- Setup common objects ---
 	model := "food-review"
 	modelSheddable := "food-review-sheddable"
@@ -166,36 +178,9 @@ func TestDirector_HandleRequest(t *testing.T) {
 		ProfileResults: map[string]*schedulingtypes.ProfileRunResult{
 			"testProfile": {
 				TargetPods: []schedulingtypes.Pod{
-					&schedulingtypes.ScoredPod{
-						Pod: &schedulingtypes.PodMetrics{
-							Pod: &backend.Pod{
-								Address:        "192.168.1.100",
-								Port:           "8000",
-								MetricsHost:    "192.168.1.100:8000",
-								NamespacedName: types.NamespacedName{Name: "pod1", Namespace: "default"},
-							},
-						},
-					},
-					&schedulingtypes.ScoredPod{
-						Pod: &schedulingtypes.PodMetrics{
-							Pod: &backend.Pod{
-								Address:        "192.168.2.100",
-								Port:           "8000",
-								MetricsHost:    "192.168.2.100:8000",
-								NamespacedName: types.NamespacedName{Name: "pod2", Namespace: "default"},
-							},
-						},
-					},
-					&schedulingtypes.ScoredPod{
-						Pod: &schedulingtypes.PodMetrics{
-							Pod: &backend.Pod{
-								Address:        "192.168.4.100",
-								Port:           "8000",
-								MetricsHost:    "192.168.4.100:8000",
-								NamespacedName: types.NamespacedName{Name: "pod4", Namespace: "default"},
-							},
-						},
-					},
+					&schedulingtypes.ScoredPod{Pod: createSchedPod("pod1", "192.168.1.100")},
+					&schedulingtypes.ScoredPod{Pod: createSchedPod("pod2", "192.168.2.100")},
+					&schedulingtypes.ScoredPod{Pod: createSchedPod("pod4", "192.168.4.100")},
 				},
 			},
 		},

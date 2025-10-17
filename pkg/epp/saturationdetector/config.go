@@ -18,55 +18,84 @@ package saturationdetector
 import (
 	"fmt"
 	"time"
-
-	"sigs.k8s.io/controller-runtime/pkg/log"
-
-	envutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/env"
 )
 
-// Default configuration values
+// Default configuration values for the SaturationDetector's P-controller.
 const (
-	// DefaultQueueDepthThreshold is the default backend waiting queue size threshold.
-	DefaultQueueDepthThreshold = 5
-	// DefaultKVCacheUtilThreshold is the default KV cache utilization (0.0 to 1.0) threshold.
-	DefaultKVCacheUtilThreshold = 0.8
-	// DefaultMetricsStalenessThreshold defines how old metrics can be before they
-	// are considered stale.
-	// Given the pod metrics refresh interval is 50ms, a threshold slightly above
-	// that should be fine.
-	DefaultMetricsStalenessThreshold = 200 * time.Millisecond
+	// DefaultTargetUtilization is the default goal state (Setpoint) for the P-controller.
+	// A value of 0.85 means the system aims to keep the aggregate backend utilization at 85%,
+	// leaving a 15% buffer to absorb variance and prevent latency spikes.
+	DefaultTargetUtilization = 0.85
+
+	// DefaultProportionalGain (Kp) is the default tuning constant for the P-controller.
+	// This value (10.0) provides a reasonably aggressive response. For example:
+	// - If error = 0.1 (10% capacity available below target), dispatch probability = 1.0.
+	// - If error = 0.05 (5% capacity available below target), dispatch probability = 0.5.
+	DefaultProportionalGain = 10.0
+
+	// DefaultCachingTTL is the default duration for which the detector's internal cache of pod metrics
+	// is considered valid. 100ms is a balance between data freshness and reducing lock contention.
+	DefaultCachingTTL = 100 * time.Millisecond
 )
 
-// Environment variable names for SaturationDetector configuration
-const (
-	EnvSdQueueDepthThreshold       = "SD_QUEUE_DEPTH_THRESHOLD"
-	EnvSdKVCacheUtilThreshold      = "SD_KV_CACHE_UTIL_THRESHOLD"
-	EnvSdMetricsStalenessThreshold = "SD_METRICS_STALENESS_THRESHOLD"
-)
+// Config holds the configuration for the SaturationDetector's P-controller.
+// These values are critical for tuning the behavior of the control loop.
+type Config struct {
+	// TargetUtilization is the goal state (Setpoint) for the P-controller.
+	// The system will modulate its dispatch rate to keep the backend utilization stable at this target.
+	// Must be between 0.0 and 1.0.
+	// Optional: Defaults to DefaultTargetUtilization.
+	TargetUtilization float64
 
-// LoadConfigFromEnv loads SaturationDetector Config from environment variables.
-func LoadConfigFromEnv() *Config {
-	// Use a default logger for initial configuration loading.
-	logger := log.Log.WithName("saturation-detector-config")
+	// ProportionalGain (Kp) is the tuning constant for the P-controller.
+	// It determines how aggressively the controller reacts to the "error" (TargetUtilization - CurrentUtilization).
+	// A higher value leads to a faster but potentially less stable response. Must be non-negative.
+	// Optional: Defaults to DefaultProportionalGain.
+	ProportionalGain float64
 
-	cfg := &Config{}
+	// CachingTTL is the duration for which the detector's internal cache of pod metrics is considered valid.
+	// This value represents a direct trade-off between data freshness and performance (lock contention).
+	// Must be a positive duration.
+	// Optional: Defaults to DefaultCachingTTL.
+	CachingTTL time.Duration
+}
 
-	cfg.QueueDepthThreshold = envutil.GetEnvInt(EnvSdQueueDepthThreshold, DefaultQueueDepthThreshold, logger)
-	if cfg.QueueDepthThreshold <= 0 {
-		cfg.QueueDepthThreshold = DefaultQueueDepthThreshold
+// ValidateAndApplyDefaults checks the configuration for validity and returns a new Config object
+// with defaults applied. It does not mutate the receiver.
+func (c *Config) ValidateAndApplyDefaults() (*Config, error) {
+	cfg := c.clone()
+
+	// --- Defaulting ---
+	if cfg.TargetUtilization == 0 {
+		cfg.TargetUtilization = DefaultTargetUtilization
+	}
+	if cfg.ProportionalGain == 0 {
+		cfg.ProportionalGain = DefaultProportionalGain
+	}
+	if cfg.CachingTTL == 0 {
+		cfg.CachingTTL = DefaultCachingTTL
 	}
 
-	cfg.KVCacheUtilThreshold = envutil.GetEnvFloat(EnvSdKVCacheUtilThreshold, DefaultKVCacheUtilThreshold, logger)
-	if cfg.KVCacheUtilThreshold <= 0 || cfg.KVCacheUtilThreshold >= 1 {
-		cfg.KVCacheUtilThreshold = DefaultKVCacheUtilThreshold
+	// --- Validation ---
+	if cfg.TargetUtilization < 0 || cfg.TargetUtilization > 1.0 {
+		return nil, fmt.Errorf("TargetUtilization must be between 0.0 and 1.0, but got %f", cfg.TargetUtilization)
+	}
+	if cfg.ProportionalGain < 0 {
+		return nil, fmt.Errorf("ProportionalGain cannot be negative, but got %f", cfg.ProportionalGain)
+	}
+	if cfg.CachingTTL <= 0 {
+		return nil, fmt.Errorf("CachingTTL must be a positive duration, but got %v", cfg.CachingTTL)
 	}
 
-	cfg.MetricsStalenessThreshold = envutil.GetEnvDuration(EnvSdMetricsStalenessThreshold, DefaultMetricsStalenessThreshold, logger)
-	if cfg.MetricsStalenessThreshold <= 0 {
-		cfg.MetricsStalenessThreshold = DefaultMetricsStalenessThreshold
-	}
+	return cfg, nil
+}
 
-	// NewDetector validates the config and assigns defaults.
-	logger.Info("SaturationDetector configuration loaded from env", "config", fmt.Sprintf("%+v", cfg))
-	return cfg
+// clone creates a shallow copy of the Config object.
+// Since all fields are value types, a shallow copy is sufficient.
+func (c *Config) clone() *Config {
+	if c == nil {
+		return nil
+	}
+	newCfg := *c
+	return &newCfg
 }

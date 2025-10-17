@@ -185,8 +185,18 @@ func (r *Runner) Run(ctx context.Context) error {
 	})
 	setupLog.Info("Flags processed", "flags", flags)
 
-	// --- Load Configurations from Environment Variables ---
-	sdConfig := saturationdetector.LoadConfigFromEnv()
+	// --- Load Configurations ---
+	// TODO: Integrate saturationdetector.Config with the main configuration story.
+	sdConfig := saturationdetector.Config{
+		TargetUtilization: saturationdetector.DefaultTargetUtilization,
+		ProportionalGain:  saturationdetector.DefaultProportionalGain,
+		CachingTTL:        saturationdetector.DefaultCachingTTL,
+	}
+	validatedSDConfig, err := sdConfig.ValidateAndApplyDefaults()
+	if err != nil {
+		setupLog.Error(err, "Failed to validate saturation detector config")
+		return err
+	}
 
 	// --- Get Kubernetes Config ---
 	cfg, err := ctrl.GetConfig()
@@ -296,7 +306,7 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	scheduler := scheduling.NewSchedulerWithConfig(r.schedulerConfig)
 
-	saturationDetector := saturationdetector.NewDetector(sdConfig, setupLog)
+	saturationDetector := saturationdetector.NewDetector(*validatedSDConfig, setupLog)
 
 	// --- Admission Control Initialization ---
 	enableFlowControl := env.GetEnvBool(enableExperimentalFlowControlLayer, false, setupLog)

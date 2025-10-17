@@ -27,6 +27,7 @@ import (
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	fctypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -35,11 +36,14 @@ import (
 // --- Mocks ---
 
 type mockSaturationDetector struct {
-	isSaturated bool
+	report saturationdetector.FullnessReport
 }
 
-func (m *mockSaturationDetector) IsSaturated(_ context.Context, _ []backendmetrics.PodMetrics) bool {
-	return m.isSaturated
+func (m *mockSaturationDetector) GetFullnessReport(
+	_ context.Context,
+	_ []backendmetrics.PodMetrics,
+) saturationdetector.FullnessReport {
+	return m.report
 }
 
 type mockFlowController struct {
@@ -67,37 +71,65 @@ func TestLegacyAdmissionController_Admit(t *testing.T) {
 	testCases := []struct {
 		name            string
 		priority        int
-		isSaturated     bool
+		mockReport      saturationdetector.FullnessReport
 		expectErr       bool
 		expectErrCode   string
 		expectErrSubstr string
 	}{
 		{
-			name:        "non_sheddable_saturated_admit",
-			priority:    0,
-			isSaturated: true,
-			expectErr:   false,
+			name:     "non_sheddable_saturated_admit",
+			priority: 0,
+			mockReport: saturationdetector.FullnessReport{
+				SubsetUtilization: 1.1,
+				ControllerInternals: saturationdetector.PControllerInternals{
+					TargetUtilization: 0.85,
+				},
+			},
+			expectErr: false,
 		},
 		{
-			name:        "sheddable_not_saturated_admit",
-			priority:    -1,
-			isSaturated: false,
-			expectErr:   false,
+			name:     "sheddable_not_saturated_admit",
+			priority: -1,
+			mockReport: saturationdetector.FullnessReport{
+				SubsetUtilization: 0.5,
+				ControllerInternals: saturationdetector.PControllerInternals{
+					TargetUtilization: 0.85,
+				},
+			},
+			expectErr: false,
 		},
 		{
-			name:            "sheddable_saturated_reject",
-			priority:        -1,
-			isSaturated:     true,
+			name:     "sheddable_at_target_reject",
+			priority: -1,
+			mockReport: saturationdetector.FullnessReport{
+				SubsetUtilization: 0.85,
+				ControllerInternals: saturationdetector.PControllerInternals{
+					TargetUtilization: 0.85,
+				},
+			},
 			expectErr:       true,
 			expectErrCode:   errutil.InferencePoolResourceExhausted,
-			expectErrSubstr: "system saturated, sheddable request dropped",
+			expectErrSubstr: "system at or above target utilization (0.85), sheddable request dropped",
+		},
+		{
+			name:     "sheddable_above_target_reject",
+			priority: -1,
+			mockReport: saturationdetector.FullnessReport{
+				SubsetUtilization: 1.1,
+				ControllerInternals: saturationdetector.PControllerInternals{
+					TargetUtilization: 0.85,
+				},
+			},
+			expectErr:       true,
+			expectErrCode:   errutil.InferencePoolResourceExhausted,
+			expectErrSubstr: "system at or above target utilization (0.85), sheddable request dropped",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			saturationDetector := &mockSaturationDetector{isSaturated: tc.isSaturated}
+			saturationDetector := &mockSaturationDetector{report: tc.mockReport}
 			ac := NewLegacyAdmissionController(saturationDetector)
 
 			err := ac.Admit(ctx, reqCtx, candidatePods, tc.priority)
@@ -169,7 +201,7 @@ func TestFlowControlAdmissionController_Admit(t *testing.T) {
 	testCases := []struct {
 		name            string
 		priority        int
-		isSaturated     bool
+		mockReport      saturationdetector.FullnessReport
 		fcOutcome       fctypes.QueueOutcome
 		fcErr           error
 		expectErr       bool
@@ -178,27 +210,42 @@ func TestFlowControlAdmissionController_Admit(t *testing.T) {
 		expectFCSkipped bool
 	}{
 		{
-			name:            "sheddable_saturated_reject",
-			priority:        -1,
-			isSaturated:     true,
+			name:     "sheddable_above_target_reject",
+			priority: -1,
+			mockReport: saturationdetector.FullnessReport{
+				SubsetUtilization: 0.9,
+				ControllerInternals: saturationdetector.PControllerInternals{
+					TargetUtilization: 0.85,
+				},
+			},
 			expectErr:       true,
 			expectErrCode:   errutil.InferencePoolResourceExhausted,
-			expectErrSubstr: "system saturated, sheddable request dropped",
+			expectErrSubstr: "system at or above target utilization (0.85), sheddable request dropped",
 			expectFCSkipped: true,
 		},
 		{
-			name:        "sheddable_not_saturated_dispatch",
-			priority:    -1,
-			isSaturated: false,
-			fcOutcome:   fctypes.QueueOutcomeDispatched,
-			expectErr:   false,
+			name:     "sheddable_below_target_dispatch",
+			priority: -1,
+			mockReport: saturationdetector.FullnessReport{
+				SubsetUtilization: 0.5,
+				ControllerInternals: saturationdetector.PControllerInternals{
+					TargetUtilization: 0.85,
+				},
+			},
+			fcOutcome: fctypes.QueueOutcomeDispatched,
+			expectErr: false,
 		},
 		{
-			name:        "non_sheddable_saturated_dispatch",
-			priority:    0,
-			isSaturated: true,
-			fcOutcome:   fctypes.QueueOutcomeDispatched,
-			expectErr:   false,
+			name:     "non_sheddable_above_target_dispatch",
+			priority: 0,
+			mockReport: saturationdetector.FullnessReport{
+				SubsetUtilization: 0.9,
+				ControllerInternals: saturationdetector.PControllerInternals{
+					TargetUtilization: 0.85,
+				},
+			},
+			fcOutcome: fctypes.QueueOutcomeDispatched,
+			expectErr: false,
 		},
 		{
 			name:            "fc_reject_capacity",
@@ -255,7 +302,7 @@ func TestFlowControlAdmissionController_Admit(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			sd := &mockSaturationDetector{isSaturated: tc.isSaturated}
+			sd := &mockSaturationDetector{report: tc.mockReport}
 			fc := &mockFlowController{outcome: tc.fcOutcome, err: tc.fcErr}
 			ac := NewFlowControlAdmissionController(sd, fc)
 

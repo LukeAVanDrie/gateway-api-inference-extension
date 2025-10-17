@@ -1174,12 +1174,15 @@ func BeforeSuite() func() {
 	schedulerConfig := scheduling.NewSchedulerConfig(profileHandler, map[string]*framework.SchedulerProfile{"default": defaultProfile})
 	scheduler := scheduling.NewSchedulerWithConfig(schedulerConfig)
 
-	sdConfig := &saturationdetector.Config{
-		QueueDepthThreshold:       saturationdetector.DefaultQueueDepthThreshold,
-		KVCacheUtilThreshold:      saturationdetector.DefaultKVCacheUtilThreshold,
-		MetricsStalenessThreshold: saturationdetector.DefaultMetricsStalenessThreshold,
+	sdConfig := saturationdetector.Config{
+		TargetUtilization: saturationdetector.DefaultTargetUtilization,
+		ProportionalGain:  saturationdetector.DefaultProportionalGain,
+		CachingTTL:        saturationdetector.DefaultCachingTTL,
 	}
-	detector := saturationdetector.NewDetector(sdConfig, logger.WithName("saturation-detector"))
+	// In a real scenario, you'd call sdConfig.ValidateAndApplyDefaults()
+	// but here we are using defaults, so we can skip the error check.
+	validatedSDConfig, _ := sdConfig.ValidateAndApplyDefaults()
+	detector := saturationdetector.NewDetector(*validatedSDConfig, logger.WithName("saturation-detector"))
 	serverRunner.SaturationDetector = detector
 	admissionController := requestcontrol.NewLegacyAdmissionController(detector)
 	serverRunner.Director = requestcontrol.NewDirectorWithConfig(serverRunner.Datastore, scheduler, admissionController, requestcontrol.NewConfig())

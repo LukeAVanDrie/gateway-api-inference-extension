@@ -30,11 +30,11 @@ const (
 // These metrics are updated on each request lifecycle event.
 type EWMAMetrics struct {
 	mu                      sync.RWMutex
-	meanSojournTimeEWMA     time.Duration // EWMA of the mean sojourn time
-	varianceSojournTimeEWMA float64       // EWMA of the variance of sojourn time (in seconds squared)
+	MeanSojournTimeEWMA     time.Duration // EWMA of the mean sojourn time
+	VarianceSojournTimeEWMA float64       // EWMA of the variance of sojourn time (in seconds squared)
 	m2SojournTimeEWMA       float64       // EWMA of the sum of squares of differences from the mean
 	sojournTimeSamples      int64         // Count of samples contributing to the current EWMA
-	arrivalRateEWMA         float64       // EWMA of the arrival rate (requests per second)
+	ArrivalRateEWMA         float64       // EWMA of the arrival rate (requests per second)
 	lastArrivalTime         time.Time     // To calculate inter-arrival times
 	arrivalSamples          int64
 }
@@ -54,9 +54,9 @@ func (m *EWMAMetrics) UpdateArrivalRateEWMA(now time.Time) {
 		if interArrivalTime > 1e-9 { // Avoid division by zero or extremely small intervals.
 			instantRate := 1.0 / interArrivalTime
 			if m.arrivalSamples <= 1 {
-				m.arrivalRateEWMA = instantRate
+				m.ArrivalRateEWMA = instantRate
 			} else {
-				m.arrivalRateEWMA = EWMAAlpha*instantRate + (1-EWMAAlpha)*m.arrivalRateEWMA
+				m.ArrivalRateEWMA = EWMAAlpha*instantRate + (1-EWMAAlpha)*m.ArrivalRateEWMA
 			}
 		}
 	}
@@ -71,40 +71,40 @@ func (m *EWMAMetrics) UpdateSojournTimeEWMA(sojournTime time.Duration) {
 	stSeconds := sojournTime.Seconds()
 
 	if m.sojournTimeSamples == 1 {
-		m.meanSojournTimeEWMA = sojournTime
+		m.MeanSojournTimeEWMA = sojournTime
 		m.m2SojournTimeEWMA = 0
-		m.varianceSojournTimeEWMA = 0
+		m.VarianceSojournTimeEWMA = 0
 		return
 	}
 
 	// Update Mean EWMA.
-	delta := stSeconds - m.meanSojournTimeEWMA.Seconds()
-	newMeanSeconds := m.meanSojournTimeEWMA.Seconds() + EWMAAlpha*delta
-	m.meanSojournTimeEWMA = time.Duration(newMeanSeconds * float64(time.Second))
+	delta := stSeconds - m.MeanSojournTimeEWMA.Seconds()
+	newMeanSeconds := m.MeanSojournTimeEWMA.Seconds() + EWMAAlpha*delta
+	m.MeanSojournTimeEWMA = time.Duration(newMeanSeconds * float64(time.Second))
 
 	// Update Variance EWMA using Welford's method adapted for EWMA.
 	delta2 := stSeconds - newMeanSeconds
 	m.m2SojournTimeEWMA = (1-EWMAAlpha)*m.m2SojournTimeEWMA + EWMAAlpha*delta*delta2
-	m.varianceSojournTimeEWMA = m.m2SojournTimeEWMA
+	m.VarianceSojournTimeEWMA = m.m2SojournTimeEWMA
 }
 
 // GetMeanSojournTimeEWMA returns the EWMA of the mean sojourn time.
 func (m *EWMAMetrics) GetMeanSojournTimeEWMA() time.Duration {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.meanSojournTimeEWMA
+	return m.MeanSojournTimeEWMA
 }
 
 // GetVarianceSojournTimeEWMA returns the EWMA of the variance of sojourn time.
 func (m *EWMAMetrics) GetVarianceSojournTimeEWMA() float64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.varianceSojournTimeEWMA
+	return m.VarianceSojournTimeEWMA
 }
 
 // GetArrivalRateEWMA returns the EWMA of the arrival rate.
 func (m *EWMAMetrics) GetArrivalRateEWMA() float64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.arrivalRateEWMA
+	return m.ArrivalRateEWMA
 }

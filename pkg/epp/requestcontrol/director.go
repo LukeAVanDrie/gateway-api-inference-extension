@@ -245,7 +245,11 @@ func (d *Director) prepareRequest(ctx context.Context, reqCtx *handlers.RequestC
 func (d *Director) toSchedulerPodMetrics(pods []backendmetrics.PodMetrics) []schedulingtypes.Pod {
 	pm := make([]schedulingtypes.Pod, len(pods))
 	for i, pod := range pods {
-		pm[i] = &schedulingtypes.PodMetrics{Pod: pod.GetPod().Clone(), MetricsState: pod.GetMetrics().Clone()}
+		pm[i] = &schedulingtypes.PodMetrics{
+			Pod:          pod.GetPod().Clone(),
+			MetricsState: pod.GetMetrics().Clone(),
+			EWMAMetrics:  pod.GetEWMAMetrics(),
+		}
 	}
 
 	return pm
