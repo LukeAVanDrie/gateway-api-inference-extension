@@ -23,26 +23,25 @@ import (
 
 // NewConfig creates a new Config object and returns its pointer.
 func NewConfig() *Config {
-	return &Config{
-		preRequestPlugins:        []PreRequest{},
-		responseReceivedPlugins:  []ResponseReceived{},
-		responseStreamingPlugins: []ResponseStreaming{},
-		responseCompletePlugins:  []ResponseComplete{},
+	c := &Config{
+		preRequestPlugins:        []rcplugins.PreRequest{},
+		responseReceivedPlugins:  []rcplugins.ResponseReceived{},
+		responseStreamingPlugins: []rcplugins.ResponseStreaming{},
+		responseCompletePlugins:  []rcplugins.ResponseComplete{},
 	}
 
-	// Add default plugins
+	// Add default plugins.
 	podQueueMetricsPlugin := rcplugins.NewPodQueueMetricsPlugin()
-	config.AddPlugins(podQueueMetricsPlugin)
-
-	return config
+	c.AddPlugins(podQueueMetricsPlugin)
+	return c
 }
 
 // Config provides a configuration for the requestcontrol plugins.
 type Config struct {
-	preRequestPlugins        []PreRequest
-	responseReceivedPlugins  []ResponseReceived
-	responseStreamingPlugins []ResponseStreaming
-	responseCompletePlugins  []ResponseComplete
+	preRequestPlugins        []rcplugins.PreRequest
+	responseReceivedPlugins  []rcplugins.ResponseReceived
+	responseStreamingPlugins []rcplugins.ResponseStreaming
+	responseCompletePlugins  []rcplugins.ResponseComplete
 }
 
 // WithPreRequestPlugins sets the given plugins as the PreRequest plugins.
@@ -54,21 +53,21 @@ func (c *Config) WithPreRequestPlugins(plugins ...rcplugins.PreRequest) *Config 
 
 // WithResponseReceivedPlugins sets the given plugins as the ResponseReceived plugins.
 // If the Config has ResponseReceived plugins already, this call replaces the existing plugins with the given ones.
-func (c *Config) WithResponseReceivedPlugins(plugins ...ResponseReceived) *Config {
+func (c *Config) WithResponseReceivedPlugins(plugins ...rcplugins.ResponseReceived) *Config {
 	c.responseReceivedPlugins = plugins
 	return c
 }
 
 // WithResponseStreamingPlugins sets the given plugins as the ResponseStreaming plugins.
 // If the Config has ResponseStreaming plugins already, this call replaces the existing plugins with the given ones.
-func (c *Config) WithResponseStreamingPlugins(plugins ...ResponseStreaming) *Config {
+func (c *Config) WithResponseStreamingPlugins(plugins ...rcplugins.ResponseStreaming) *Config {
 	c.responseStreamingPlugins = plugins
 	return c
 }
 
 // WithResponseCompletePlugins sets the given plugins as the ResponseComplete plugins.
 // If the Config has ResponseComplete plugins already, this call replaces the existing plugins with the given ones.
-func (c *Config) WithResponseCompletePlugins(plugins ...ResponseComplete) *Config {
+func (c *Config) WithResponseCompletePlugins(plugins ...rcplugins.ResponseComplete) *Config {
 	c.responseCompletePlugins = plugins
 	return c
 }
@@ -82,13 +81,13 @@ func (c *Config) AddPlugins(pluginObjects ...plugins.Plugin) {
 		if preRequestPlugin, ok := plugin.(rcplugins.PreRequest); ok {
 			c.preRequestPlugins = append(c.preRequestPlugins, preRequestPlugin)
 		}
-		if responseReceivedPlugin, ok := plugin.(ResponseReceived); ok {
+		if responseReceivedPlugin, ok := plugin.(rcplugins.ResponseReceived); ok {
 			c.responseReceivedPlugins = append(c.responseReceivedPlugins, responseReceivedPlugin)
 		}
-		if responseStreamingPlugin, ok := plugin.(ResponseStreaming); ok {
+		if responseStreamingPlugin, ok := plugin.(rcplugins.ResponseStreaming); ok {
 			c.responseStreamingPlugins = append(c.responseStreamingPlugins, responseStreamingPlugin)
 		}
-		if responseCompletePlugin, ok := plugin.(ResponseComplete); ok {
+		if responseCompletePlugin, ok := plugin.(rcplugins.ResponseComplete); ok {
 			c.responseCompletePlugins = append(c.responseCompletePlugins, responseCompletePlugin)
 		}
 	}

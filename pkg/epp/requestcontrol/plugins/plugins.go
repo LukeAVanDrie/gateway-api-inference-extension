@@ -19,7 +19,6 @@ package plugins
 import (
 	"context"
 
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 )
@@ -43,17 +42,17 @@ type PreRequest interface {
 // The given pod argument is the pod that served the request.
 type ResponseReceived interface {
 	plugins.Plugin
-	ResponseReceived(ctx context.Context, request *types.LLMRequest, response *Response, targetPod *backend.Pod)
+	ResponseReceived(ctx context.Context, request *types.LLMRequest, response *Response, targetPod types.Pod)
 }
 
 // ResponseStreaming is called by the director after each chunk of streaming response is sent.
 type ResponseStreaming interface {
 	plugins.Plugin
-	ResponseStreaming(ctx context.Context, request *types.LLMRequest, response *Response, targetPod *backend.Pod)
+	ResponseStreaming(ctx context.Context, request *types.LLMRequest, response *Response, targetPod types.Pod)
 }
 
 // ResponseComplete is called by the director after the complete response is sent.
 type ResponseComplete interface {
 	plugins.Plugin
-	ResponseComplete(ctx context.Context, request *types.LLMRequest, response *Response, targetPod *backend.Pod)
+	ResponseComplete(ctx context.Context, request *types.LLMRequest, response *Response, targetPod types.Pod)
 }

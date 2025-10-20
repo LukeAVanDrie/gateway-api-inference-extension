@@ -187,11 +187,7 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	// --- Load Configurations ---
 	// TODO: Integrate saturationdetector.Config with the main configuration story.
-	sdConfig := saturationdetector.Config{
-		TargetUtilization: saturationdetector.DefaultTargetUtilization,
-		ProportionalGain:  saturationdetector.DefaultProportionalGain,
-		CachingTTL:        saturationdetector.DefaultCachingTTL,
-	}
+	sdConfig := saturationdetector.Config{}
 	validatedSDConfig, err := sdConfig.ValidateAndApplyDefaults()
 	if err != nil {
 		setupLog.Error(err, "Failed to validate saturation detector config")

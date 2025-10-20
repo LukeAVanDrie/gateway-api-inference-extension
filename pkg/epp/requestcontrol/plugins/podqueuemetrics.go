@@ -22,7 +22,6 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -42,7 +41,7 @@ func NewPodQueueMetricsPlugin() *PodQueueMetricsPlugin {
 }
 
 var _ PreRequest = &PodQueueMetricsPlugin{}
-var _ PostResponse = &PodQueueMetricsPlugin{}
+var _ ResponseComplete = &PodQueueMetricsPlugin{}
 
 // TypedName returns the type and name of the plugin.
 func (p *PodQueueMetricsPlugin) TypedName() plugins.TypedName {
@@ -55,7 +54,6 @@ func (p *PodQueueMetricsPlugin) PreRequest(
 	ctx context.Context,
 	_ *types.LLMRequest,
 	schedulingResult *types.SchedulingResult,
-	_ int,
 ) {
 	targetPod := schedulingResult.ProfileResults[schedulingResult.PrimaryProfileName].TargetPods[0]
 	metrics := targetPod.GetEWMAMetrics()
@@ -64,13 +62,13 @@ func (p *PodQueueMetricsPlugin) PreRequest(
 		"pod", targetPod.GetPod().NamespacedName, "newRate", arrivalRate)
 }
 
-// PostResponse is called after the response is received from the backend.
+// ResponseComplete is called after the response is received from the backend.
 // It updates the sojourn time mean and variance EWMAs for the pod.
-func (p *PodQueueMetricsPlugin) PostResponse(
+func (p *PodQueueMetricsPlugin) ResponseComplete(
 	ctx context.Context,
 	_ *types.LLMRequest,
 	response *Response,
-	targetPod backendmetrics.PodMetrics,
+	targetPod types.Pod,
 ) {
 	metrics := targetPod.GetEWMAMetrics()
 	mean, variance := metrics.UpdateSojournTimeEWMA(response.SojournTime)

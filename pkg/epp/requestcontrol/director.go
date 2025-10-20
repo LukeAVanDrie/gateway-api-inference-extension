@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metadata"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -220,20 +221,18 @@ func (d *Director) prepareRequest(ctx context.Context, reqCtx *handlers.RequestC
 		return reqCtx, errutil.Error{Code: errutil.Internal, Msg: "results must be greater than zero"}
 	}
 	// primary profile is used to set destination
-	targetPods := []*backend.Pod{}
 	targetEndpoints := []string{}
 
 	for _, pod := range result.ProfileResults[result.PrimaryProfileName].TargetPods {
 		curPod := pod.GetPod()
 		curEndpoint := net.JoinHostPort(curPod.GetIPAddress(), curPod.GetPort())
-		targetPods = append(targetPods, curPod)
 		targetEndpoints = append(targetEndpoints, curEndpoint)
 	}
 
 	multiEndpointString := strings.Join(targetEndpoints, ",")
 	logger.V(logutil.VERBOSE).Info("Request handled", "objectiveKey", reqCtx.ObjectiveKey, "incomingModelName", reqCtx.IncomingModelName, "targetModel", reqCtx.TargetModelName, "endpoint", multiEndpointString)
 
-	reqCtx.TargetPod = targetPods[0]
+	reqCtx.TargetPod = result.ProfileResults[result.PrimaryProfileName].TargetPods[0]
 	reqCtx.TargetEndpoint = multiEndpointString
 	reqCtx.RequestSentTimestamp = time.Now()
 
@@ -257,20 +256,10 @@ func (d *Director) toSchedulerPodMetrics(pods []backendmetrics.PodMetrics) []sch
 
 // HandleResponseReceived is called when the response headers are received.
 func (d *Director) HandleResponseReceived(ctx context.Context, reqCtx *handlers.RequestContext) (*handlers.RequestContext, error) {
-	response := &Response{
+	response := &plugins.Response{
 		RequestId: reqCtx.Request.Headers[requtil.RequestIdHeaderKey],
 		Headers:   reqCtx.Response.Headers,
 	}
-
-	podMetricsList := d.datastore.PodList(func(pm backendmetrics.PodMetrics) bool {
-		return pm.GetPod().NamespacedName == reqCtx.TargetPod.NamespacedName
-	})
-
-	if len(podMetricsList) == 0 {
-		logger.V(logutil.TRACE).Info("Target pod not found in datastore, skipping PostResponse plugins", "pod", reqCtx.TargetPod.NamespacedName)
-		return reqCtx, nil
-	}
-	targetPodMetrics := podMetricsList[0]
 
 	// TODO: to extend fallback functionality, handle cases where target pod is unavailable
 	// https://github.com/kubernetes-sigs/gateway-api-inference-extension/issues/1224
@@ -283,7 +272,7 @@ func (d *Director) HandleResponseReceived(ctx context.Context, reqCtx *handlers.
 func (d *Director) HandleResponseBodyStreaming(ctx context.Context, reqCtx *handlers.RequestContext) (*handlers.RequestContext, error) {
 	logger := log.FromContext(ctx).WithValues("stage", "bodyChunk")
 	logger.V(logutil.TRACE).Info("Entering HandleResponseBodyChunk")
-	response := &Response{
+	response := &plugins.Response{
 		RequestId: reqCtx.Request.Headers[requtil.RequestIdHeaderKey],
 		Headers:   reqCtx.Response.Headers,
 	}
@@ -297,14 +286,19 @@ func (d *Director) HandleResponseBodyStreaming(ctx context.Context, reqCtx *hand
 func (d *Director) HandleResponseBodyComplete(ctx context.Context, reqCtx *handlers.RequestContext) (*handlers.RequestContext, error) {
 	logger := log.FromContext(ctx).WithValues("stage", "bodyChunk")
 	logger.V(logutil.DEBUG).Info("Entering HandleResponseBodyComplete")
-	response := &Response{
-		RequestId: reqCtx.Request.Headers[requtil.RequestIdHeaderKey],
-		Headers:   reqCtx.Response.Headers,
+
+	// Calculate Sojourn Time
+	sojournTime := time.Since(reqCtx.RequestSentTimestamp)
+
+	response := &plugins.Response{
+		RequestId:   reqCtx.Request.Headers[requtil.RequestIdHeaderKey],
+		Headers:     reqCtx.Response.Headers,
+		SojournTime: sojournTime, // Set the calculated sojourn time
 	}
 
 	d.runResponseCompletePlugins(ctx, reqCtx.SchedulingRequest, response, reqCtx.TargetPod)
 
-	logger.V(logutil.DEBUG).Info("Exiting HandleResponseBodyComplete")
+	logger.V(logutil.DEBUG).Info("Exiting HandleResponseBodyComplete", "sojournTime", sojournTime)
 	return reqCtx, nil
 }
 
@@ -318,47 +312,46 @@ func (d *Director) GetRandomPod() *backend.Pod {
 	return pod.GetPod()
 }
 
-func (d *Director) runPreRequestPlugins(ctx context.Context, request *schedulingtypes.LLMRequest,
-	schedulingResult *schedulingtypes.SchedulingResult) {
+func (d *Director) runPreRequestPlugins(ctx context.Context, request *schedulingtypes.LLMRequest, schedulingResult *schedulingtypes.SchedulingResult) {
 	loggerDebug := log.FromContext(ctx).V(logutil.DEBUG)
 	for _, plugin := range d.requestControlPlugins.preRequestPlugins {
 		loggerDebug.Info("Running PreRequest plugin", "plugin", plugin.TypedName())
 		before := time.Now()
 		plugin.PreRequest(ctx, request, schedulingResult)
-		metrics.RecordPluginProcessingLatency(PreRequestExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
+		metrics.RecordPluginProcessingLatency(plugins.PreRequestExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		loggerDebug.Info("Completed running PreRequest plugin successfully", "plugin", plugin.TypedName())
 	}
 }
 
-func (d *Director) runResponseReceivedPlugins(ctx context.Context, request *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (d *Director) runResponseReceivedPlugins(ctx context.Context, request *schedulingtypes.LLMRequest, response *plugins.Response, targetPod schedulingtypes.Pod) {
 	loggerDebug := log.FromContext(ctx).V(logutil.DEBUG)
 	for _, plugin := range d.requestControlPlugins.responseReceivedPlugins {
 		loggerDebug.Info("Running ResponseReceived plugin", "plugin", plugin.TypedName())
 		before := time.Now()
 		plugin.ResponseReceived(ctx, request, response, targetPod)
-		metrics.RecordPluginProcessingLatency(ResponseReceivedExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
+		metrics.RecordPluginProcessingLatency(plugins.ResponseReceivedExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		loggerDebug.Info("Completed running ResponseReceived plugin successfully", "plugin", plugin.TypedName())
 	}
 }
 
-func (d *Director) runResponseStreamingPlugins(ctx context.Context, request *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (d *Director) runResponseStreamingPlugins(ctx context.Context, request *schedulingtypes.LLMRequest, response *plugins.Response, targetPod schedulingtypes.Pod) {
 	loggerTrace := log.FromContext(ctx).V(logutil.TRACE)
 	for _, plugin := range d.requestControlPlugins.responseStreamingPlugins {
 		loggerTrace.Info("Running ResponseStreaming plugin", "plugin", plugin.TypedName())
 		before := time.Now()
 		plugin.ResponseStreaming(ctx, request, response, targetPod)
-		metrics.RecordPluginProcessingLatency(ResponseStreamingExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
+		metrics.RecordPluginProcessingLatency(plugins.ResponseStreamingExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		loggerTrace.Info("Completed running ResponseStreaming plugin successfully", "plugin", plugin.TypedName())
 	}
 }
 
-func (d *Director) runResponseCompletePlugins(ctx context.Context, request *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (d *Director) runResponseCompletePlugins(ctx context.Context, request *schedulingtypes.LLMRequest, response *plugins.Response, targetPod schedulingtypes.Pod) {
 	loggerDebug := log.FromContext(ctx).V(logutil.DEBUG)
 	for _, plugin := range d.requestControlPlugins.responseCompletePlugins {
 		loggerDebug.Info("Running ResponseComplete plugin", "plugin", plugin.TypedName())
 		before := time.Now()
 		plugin.ResponseComplete(ctx, request, response, targetPod)
-		metrics.RecordPluginProcessingLatency(ResponseCompleteExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
+		metrics.RecordPluginProcessingLatency(plugins.ResponseCompleteExtensionPoint, plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		loggerDebug.Info("Completed running ResponseComplete plugin successfully", "plugin", plugin.TypedName())
 	}
 }

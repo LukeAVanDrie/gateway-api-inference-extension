@@ -17,13 +17,37 @@ limitations under the License.
 // Package saturationdetector provides a dynamic, request-agnostic mechanism to manage load and prevent congestion on
 // backend model servers.
 //
-// # Core Design: A Proportional (P) Controller over Queuing Theory Models
+// # Core Design: A Bang-Bang Controller over Queuing Theory Models
 //
-// This package implements a Proportional (P) Controller (https://en.wikipedia.org/wiki/Proportional_control) to create
-// a self-regulating system that smoothly manages backend utilization, moving beyond simple, static thresholds.
+// This package implements a Bang-Bang Controller (https://en.wikipedia.org/wiki/Bang-bang_control), a type of feedback
+// controller that acts as a circuit breaker. It provides a deterministic saturation signal to stabilize backend
+// utilization without requiring complex tuning or apriori estimation of maximum serving capacity.
 //
 // The controller's intelligence is derived from queuing theory models (https://en.wikipedia.org/wiki/Queueing_theory),
 // treating each backend pod as a black-box "server."
+//
+// # Key Mechanisms
+//
+//  1. Utilization Law (The Control Signal):
+//     The controller's primary input is an aggregate "Subset Utilization" (ρ_subset). This is based on the Utilization
+//     Law extended to a multi-server system: the ratio of offered load to available effective capacity
+//     (ρ_subset = Σλᵢ / Σμᵢ), where μᵢ = 1 / E[S_effᵢ].
+//
+//  2. M/G/1 Queue Model (Predictive Analysis):
+//     For per-pod analysis, the detector uses the Pollaczek-Khinchine formula based on the M/G/1 queue model
+//     (https://en.wikipedia.org/wiki/M/G/1_queue).
+//     This model is chosen because the 'G' (General distribution) correctly accounts for the high-variance service
+//     times inherent in LLM workloads.
+//
+//  3. Hysteresis (Preventing Oscillations):
+//     To prevent rapid oscillations (chatter) around the setpoint, the controller uses two thresholds:
+//     - High Watermark (TargetUtilization): Blocking engages when ρ_subset exceeds this threshold.
+//     - Low Watermark (ResumeUtilization): Dispatch resumes only when ρ_subset drops below this threshold.
+//
+//  4. Stateful Probing (Deadlock Prevention):
+//     If the metrics used to calculate utilization are unreliable (stale or insufficient samples), the controller can
+//     deadlock (due to metric freeze). A probing mechanism prevents this by periodically forcing a single
+//     request (at a fixed ProbeInterval) to gather fresh data, ensuring recovery.
 //
 // # The Black-Box Abstraction and "Effective Service Time"
 //
@@ -35,27 +59,10 @@ limitations under the License.
 // systems, known technically as a "Flow Equivalent Server" model.
 //
 // This abstraction ensures the control loop is desirable: if the pod's responsiveness drops for any reason, E[S_eff]
-// increases, utilization (ρ = λ * E[S_eff]) rises, and the P-controller reacts.
+// increases, utilization (ρ = λ * E[S_eff]) rises, and the controller reacts.
 //
 // Consequence: The predictive latency metrics (PMST, W_q) derived from this abstraction have a conservative bias
 // (they may overestimate absolute latency) but serve as robust relative indicators of congestion.
-//
-// # Key Models
-//
-//  1. Utilization Law (The Control Signal):
-//     The P-controller's primary input is an aggregate "Subset Utilization" (ρ_subset). This is based on the Utilization
-//     Law extended to a multi-server system: the ratio of offered load to available effective capacity
-//     (ρ_subset = Σλᵢ / Σμᵢ), where μᵢ = 1 / E[S_effᵢ].
-//
-//  2. M/G/1 Queue Model (Predictive Analysis):
-//     For per-pod analysis, the detector uses the Pollaczek-Khinchine formula based on the M/G/1 queue model
-//     (https://en.wikipedia.org/wiki/M/G/1_queue).
-//     This model is chosen because the 'G' (General distribution) correctly accounts for the high-variance service times
-//     inherent in LLM workloads.
-//
-//  3. Leaky Bucket (Deadlock Prevention):
-//     A minimum dispatch probability ensures a small amount of traffic always flows, allowing the system to
-//     continuously probe backend capacity and preventing a "metrics freeze" deadlock.
 //
 // # Architectural Impact
 //
@@ -71,8 +78,8 @@ import (
 	"context"
 	"maps"
 	"math"
-	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -86,32 +93,20 @@ import (
 // trends towards infinity.
 var overloadedLatency = time.Hour * 24
 
-// PControllerInternals exposes the internal state of the Proportional (P) Controller for observability and tuning.
-// It details the calculation used to determine the throttling action.
-// See: https://en.wikipedia.org/wiki/Proportional_control
-type PControllerInternals struct {
-	// TargetUtilization is the configured goal state (Setpoint) for the system.
-	// Usage: This is the primary knob for balancing throughput vs. latency.
+// BangBangControllerInternals exposes the internal state of the Bang-Bang Controller for observability.
+type BangBangControllerInternals struct {
+	// TargetUtilization is the High Watermark (Upper Threshold).
 	TargetUtilization float64
-
-	// CurrentUtilization is the measured aggregate utilization (Process Variable) of the subset (ρ_subset).
+	// ResumeUtilization is the Low Watermark (Lower Threshold).
+	ResumeUtilization float64
+	// CurrentUtilization is the measured aggregate utilization of the subset (ρ_subset).
 	CurrentUtilization float64
-
-	// ErrorSignal (e) is the difference between the target and current utilization.
-	// Formula: e = TargetUtilization - CurrentUtilization.
-	// Interpretation: A positive value indicates available capacity relative to the target. A negative value indicates
-	// the system is over its target utilization.
-	ErrorSignal float64
-
-	// DispatchProbability is the calculated output of the P-loop (Control Output).
-	// Formula: Kp * ErrorSignal, clamped to [0.0, 1.0].
-	// Interpretation: The probability that a new request should be admitted. As utilization increases, this value
-	// smoothly decreases, providing proactive throttling.
-	DispatchProbability float64
+	// IsSaturated is the deterministic state of the controller (true if blocking is engaged).
+	IsSaturated bool
 }
 
-// PodFullnessDetails encapsulates the calculated metrics for a single pod using the M/G/1 model and the Effective
-// Service Time abstraction. It provides a predictive view of a pod's congestion state.
+// PodFullnessDetails encapsulates the calculated metrics for a single pod using the M/G/1 model.
+// It provides a predictive view of a pod's congestion state.
 type PodFullnessDetails struct {
 	// --- Core Predictive Metrics (M/G/1 Model Outputs) ---
 
@@ -197,67 +192,84 @@ type FullnessReport struct {
 	// Usage: Used for advanced scheduling decisions and detailed observability.
 	PerPodDetails map[string]PodFullnessDetails // Key: pod namespaced name
 
-	// ControllerInternals exposes the state of the P-controller based on the SubsetUtilization.
-	ControllerInternals PControllerInternals
+	// ControllerInternals exposes the state of the Bang-Bang controller.
+	ControllerInternals BangBangControllerInternals
+
+	// isReliable is true if and only if every pod in the report is stable and fresh.
+	isReliable bool
 }
 
 // --- Detector ---
 
-// Detector determines system saturation and provides detailed pod metrics using a P-Controller and Queuing Theory.
+// Detector determines system saturation using a Bang-Bang Controller and Queuing Theory.
 // It is designed as a global singleton and is safe for concurrent access.
 type Detector struct {
 	config Config
 
-	// rand is the source of randomness for the probabilistic P-controller output.
-	// Access must be synchronized using randMu, as math/rand.Rand with a local source is not concurrency-safe.
-	rand   *rand.Rand
-	randMu sync.Mutex
+	// --- Controller State ---
 
-	// cache provides an internal, TTL-based cache of pod metrics.
-	// This optimization decouples the high-frequency decision loop from the high-contention metrics write path.
-	cache    map[string]cachedPodMetrics
+	// isSaturated tracks the current state of the Bang-Bang controller (engaged or disengaged).
+	// Used to implement hysteresis. Accessed atomically.
+	isSaturated atomic.Bool
+
+	// --- Stabilization State (Stateful Probing) ---
+
+	// probeMu protects lastProbeTime.
+	probeMu sync.Mutex
+	// lastProbeTime tracks the timestamp of the last forced probe. Used to enforce the ProbeInterval.
+	lastProbeTime time.Time
+
+	// --- Caching ---
+
+	// cache stores the comprehensive state (inputs and derived outputs) for each pod.
+	cache    map[string]cachedPodState
 	cacheTTL time.Duration
 	// mu protects the cache map. RWMutex optimizes for the common read path.
 	mu sync.RWMutex
 }
 
-// cachedPodMetrics holds a snapshot of the EWMA metrics and physical measurements, forming the basis of the detector's
-// internal cache. By snapshotting both, we ensure temporal consistency for calculations like QueueMomentum.
-type cachedPodMetrics struct {
-	// --- EWMA Inputs (M/G/1 Model Inputs) ---
+// rawInputs captures the metrics fetched directly from the source.
+type rawInputs struct {
 	arrivalRate                  float64
 	meanEffectiveServiceTime     time.Duration // E[S_effective] (Historical Mean Sojourn Time)
 	varianceEffectiveServiceTime float64       // Var(S_effective) (in seconds^2)
+	measuredQueueSize            int           // Used for calculating QueueMomentum
+	sojournTimeSamples           int64
+	lastSojournUpdate            time.Time
+}
 
-	// --- Physical Measurements ---
-	measuredQueueSize int // Used for calculating QueueMomentum
-
-	timestamp time.Time
+// cachedPodState holds the comprehensive, temporally consistent state of a pod, including inputs and derived outputs.
+// This structure enables eager calculation during cache refresh, minimizing work on the hot path.
+type cachedPodState struct {
+	details           PodFullnessDetails // the derived M/G/1 metrics
+	effectiveCapacity float64            // (μ) is the calculated service rate (1 / E[S_eff])
+	arrivalRate       float64            //  (λ) is the measured arrival rate
+	isReliable        bool               // reliability status of the metrics
+	timestamp         time.Time          // the time when this state was calculated
 }
 
 // NewDetector creates a new SaturationDetector.
 func NewDetector(config Config, logger logr.Logger) *Detector {
 	logger.V(logutil.DEFAULT).WithName("SaturationDetector").Info(
-		"Creating new P-Controller SaturationDetector",
-		"targetUtilization", config.TargetUtilization,
-		"proportionalGain (Kp)", config.ProportionalGain,
-		"minDispatchProbability", config.MinDispatchProbability,
-		"cachingTTL", config.CachingTTL.String())
-
-	// Initialize the random source. We use a local source rather than the global one.
-	//nolint:gosec // G404: Use of weak random number generator (math/rand) is acceptable for probabilistic throttling.
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+		"Creating new SaturationDetector",
+		"targetUtilization (Upper)", config.TargetUtilization,
+		"resumeUtilization (Lower)", config.ResumeUtilization,
+		"cachingTTL", config.CachingTTL.String(),
+		"warmUpSampleCount", config.WarmUpSampleCount,
+		"ewmaStalenessThreshold", config.EWMAStalenessThreshold.String(),
+		"probeInterval", config.ProbeInterval.String(),
+	)
 
 	return &Detector{
 		config:   config,
-		rand:     r,
-		cache:    make(map[string]cachedPodMetrics),
+		cache:    make(map[string]cachedPodState),
 		cacheTTL: config.CachingTTL,
+		// isSaturated initializes to false (allow traffic).
 	}
 }
 
 // GetFullnessReport is the primary, unified entry point to the detector.
-// It performs a single-pass calculation to produce a comprehensive report.
+// It aggregates the pre-computed pod states and updates the controller state.
 //
 // # The Utilization Calculation
 //
@@ -276,34 +288,26 @@ func NewDetector(config Config, logger logr.Logger) *Detector {
 //   - Latency-Aware: Because capacity (μ) is based on latency (E[S_effective]), the signal directly reflects the
 //     system's responsiveness and provides a robust signal for the control loop.
 func (d *Detector) GetFullnessReport(ctx context.Context, candidatePods []backendmetrics.PodMetrics) FullnessReport {
-	// 1. Get temporally consistent snapshots of all inputs (cached).
-	snapshots := d.getMetricSnapshots(candidatePods)
+	// 1. Get temporally consistent, comprehensive states (cached and eagerly calculated).
+	states := d.getPodStates(candidatePods)
 
-	// 2. Calculate aggregate metrics and per-pod details.
+	// 2. Aggregate results from the eagerly computed states.
 	var totalArrivalRate float64
 	var totalServiceCapacity float64
-	perPodDetails := make(map[string]PodFullnessDetails, len(snapshots))
+	perPodDetails := make(map[string]PodFullnessDetails, len(states))
+	isReliable := true
 
-	for i, snapshot := range snapshots {
-		// We assume candidatePods[i] corresponds to snapshots[i].
-		// If the snapshot is empty (timestamp is zero), it means the pod was invalid or metrics were missing.
-		if snapshot.timestamp.IsZero() {
+	for i, state := range states {
+		// If the snapshot is empty (timestamp is zero), it means the pod was invalid.
+		if state.timestamp.IsZero() {
 			continue
 		}
 
 		podID := candidatePods[i].GetPod().NamespacedName.String()
-
-		// Per-Pod Predictive Calculation (M/G/1)
-		details := d.calculatePodDetails(snapshot)
-		perPodDetails[podID] = details
-
-		// Aggregate Metric Calculation
-		totalArrivalRate += snapshot.arrivalRate // Accumulate Σλ
-
-		// Accumulate Σμ. μ = 1 / E[S]. A pod with no E[S] contributes no capacity.
-		if snapshot.meanEffectiveServiceTime > 0 {
-			totalServiceCapacity += 1.0 / snapshot.meanEffectiveServiceTime.Seconds()
-		}
+		perPodDetails[podID] = state.details
+		totalArrivalRate += state.arrivalRate
+		totalServiceCapacity += state.effectiveCapacity
+		isReliable = isReliable && state.isReliable
 	}
 
 	// 3. Calculate Utilization Factor: ρ_subset = Σλᵢ / Σμᵢ
@@ -311,110 +315,207 @@ func (d *Detector) GetFullnessReport(ctx context.Context, candidatePods []backen
 	if totalServiceCapacity > 1e-9 { // Avoid division by zero
 		subsetUtilization = totalArrivalRate / totalServiceCapacity
 	} else if totalArrivalRate > 1e-9 {
-		// If load is arriving (λ > 0) but capacity is effectively zero (μ ≈ 0, e.g., all pods are cold), utilization is
-		// high. We use 1.5 as a strong signal > 1.0.
-		subsetUtilization = 1.5
+		// If load is arriving (λ > 0) but capacity is effectively zero (μ ≈ 0), utilization is high.
+		subsetUtilization = 1.5 // Sentinel value > 1.0.
 	}
 	// If both are zero, utilization is 0.0.
 
-	// 4. Calculate P-Controller State.
-	controllerInternals := d.calculatePControllerOutput(subsetUtilization)
+	// 4. Evaluate Bang-Bang Controller State (with Hysteresis).
+	isSaturated := d.evaluateHysteresis(subsetUtilization)
+
+	controllerInternals := BangBangControllerInternals{
+		TargetUtilization:  d.config.TargetUtilization,
+		ResumeUtilization:  d.config.ResumeUtilization,
+		CurrentUtilization: subsetUtilization,
+		IsSaturated:        isSaturated,
+	}
 
 	return FullnessReport{
 		SubsetUtilization:   subsetUtilization,
 		PerPodDetails:       perPodDetails,
 		ControllerInternals: controllerInternals,
+		isReliable:          isReliable,
 	}
 }
 
-// IsSaturated applies the P-controller logic probabilistically based on the FullnessReport.
+// IsSaturated provides the deterministic signal of pool subset saturation.
 //
-// It returns true if the current request should be throttled. This probabilistic approach ensures smooth throttling as
-// the system approaches its TargetUtilization.
-//
-// # The P-Control Loop
-//
-// The control loop operates on these core concepts:
-//
-//   - Process Variable (The Current State): The `SubsetUtilization` (ρ_subset).
-//   - Setpoint (The Desired State): The configured `TargetUtilization` (e.g., 0.85) that balances throughput with a
-//     sufficient capacity buffer to absorb variance and prevent latency spikes.
-//   - Control Output (The Action): The difference ("error") is multiplied by the Proportional Gain (Kp) to calculate a
-//     "dispatch probability" [0.0, 1.0].
-//
-// As the system approaches its target utilization, this probability smoothly decreases, effectively throttling the rate
-// of new requests proactively.
-//
-// # Control Logic
-//
-// The decision integrates these additional mechanisms:
-//
-// 1. Leaky Bucket (Deadlock Prevention): Ensures the DispatchProbability never falls below MinDispatchProbability.
+// Control Logic:
+// 1. Analyze State: Get report (which updates cache and controller state).
+// 2. Stateful Probing: If unreliable, check if a periodic probe is due (deterministic override).
+// 3. Bang-Bang Control: Otherwise, return the state determined by the hysteresis logic.
 func (d *Detector) IsSaturated(ctx context.Context, candidatePods []backendmetrics.PodMetrics) bool {
-	// 1. Generate the Fullness Report (P-Controller State).
+	logger := log.FromContext(ctx).V(logutil.TRACE)
 	report := d.GetFullnessReport(ctx, candidatePods)
-	dispatchProbability := report.ControllerInternals.DispatchProbability
-
-	// 2. Apply Leaky Bucket (MinDispatchProbability).
-	leakyBucketApplied := false
-	if d.config.MinDispatchProbability > 0 && dispatchProbability < d.config.MinDispatchProbability {
-		dispatchProbability = d.config.MinDispatchProbability
-		leakyBucketApplied = true
+	if !report.isReliable {
+		if d.shouldForceProbe() {
+			logger.Info("Metrics unreliable and probe interval elapsed; forcing periodic probe (dispatch).")
+			return false // Deterministic override: Dispatch the request.
+		}
+		// Metrics unreliable, but probe not due yet. Block traffic to prevent overload on potentially cold backends.
+		logger.Info("Metrics unreliable, probe interval not yet elapsed; blocking dispatch.")
+		return true
 	}
 
-	// 3. Apply P-Controller Probabilistic Decision.
-	// We must lock the RNG as math/rand.Rand (with local source) is not safe for concurrent use.
-	d.randMu.Lock()
-	randVal := d.rand.Float64()
-	d.randMu.Unlock()
-
-	// If the random number is >= the dispatch probability, the P-controller throttles the request.
-	pControllerThrottles := randVal >= dispatchProbability
-
-	// Observability: Log the internal state of the P-controller at trace level for tuning.
-	log.FromContext(ctx).V(logutil.TRACE).Info("P-Controller Evaluation",
-		"throttledByPController", pControllerThrottles,
-		"subsetUtilization", report.SubsetUtilization,
-		"targetUtilization", report.ControllerInternals.TargetUtilization,
-		"calculatedProbability", report.ControllerInternals.DispatchProbability,
-		"finalProbability", dispatchProbability,
-		"leakyBucketApplied", leakyBucketApplied,
-	)
-
-	return pControllerThrottles
+	isSaturated := report.ControllerInternals.IsSaturated
+	if logger.Enabled() {
+		logger.Info("Bang-Bang Evaluation",
+			"isSaturated", isSaturated,
+			"subsetUtilization", report.SubsetUtilization,
+			"upperThreshold", report.ControllerInternals.TargetUtilization,
+			"lowerThreshold", report.ControllerInternals.ResumeUtilization,
+		)
+	}
+	return isSaturated
 }
 
-// calculatePControllerOutput implements the core logic of the P-controller.
-func (d *Detector) calculatePControllerOutput(currentUtilization float64) PControllerInternals {
-	// Error Signal (e) = Setpoint - Process Variable
-	errSignal := d.config.TargetUtilization - currentUtilization
+// evaluateHysteresis implements the core logic of the Bang-Bang controller with hysteresis.
+func (d *Detector) evaluateHysteresis(currentUtilization float64) bool {
+	if d.isSaturated.Load() {
+		// System is currently blocked. Only resume if utilization drops below the Low Watermark.
+		if currentUtilization <= d.config.ResumeUtilization {
+			d.isSaturated.Store(false)
+			return false
+		}
+		return true
+	} else {
+		// System is currently allowing traffic. Block if utilization exceeds the High Watermark.
+		if currentUtilization >= d.config.TargetUtilization {
+			d.isSaturated.Store(true)
+			return true
+		}
+		return false
+	}
+}
 
-	// Control Output = Kp * e
-	dispatchProbability := d.config.ProportionalGain * errSignal
+// shouldForceProbe determines if a probe is due based on the ProbeInterval.
+// This assumes the caller has already determined that metrics are unreliable.
+func (d *Detector) shouldForceProbe() bool {
+	d.probeMu.Lock()
+	defer d.probeMu.Unlock()
+	now := time.Now()
+	if now.Sub(d.lastProbeTime) > d.config.ProbeInterval {
+		d.lastProbeTime = now
+		return true
+	}
+	return false
+}
 
-	// Clamp the output to the valid range [0.0, 1.0].
-	dispatchProbability = clamp(dispatchProbability, 0.0, 1.0)
+// getPodStates is the core of the internal caching logic. It implements eager calculation.
+func (d *Detector) getPodStates(pods []backendmetrics.PodMetrics) []cachedPodState {
+	states := make([]cachedPodState, len(pods))
+	var podsToRefreshIndices []int
+	now := time.Now()
 
-	return PControllerInternals{
-		TargetUtilization:   d.config.TargetUtilization,
-		CurrentUtilization:  currentUtilization,
-		ErrorSignal:         errSignal,
-		DispatchProbability: dispatchProbability,
+	// Phase 1: Read Lock (Optimized for Cache Hits)
+	d.mu.RLock()
+	for i, podMetric := range pods {
+		if podMetric == nil || podMetric.GetPod() == nil {
+			continue
+		}
+		podID := podMetric.GetPod().NamespacedName.String()
+		cached, found := d.cache[podID]
+		if found && now.Sub(cached.timestamp) < d.cacheTTL {
+			states[i] = cached // Cache HIT and VALID
+		} else {
+			podsToRefreshIndices = append(podsToRefreshIndices, i) // Cache MISS or STALE
+		}
+	}
+	d.mu.RUnlock()
+
+	// Phase 2: Refresh and Eager Calculation (No Lock Held)
+	if len(podsToRefreshIndices) > 0 {
+		refreshed := make(map[string]cachedPodState)
+		for _, index := range podsToRefreshIndices {
+			podMetric := pods[index]
+			podID := podMetric.GetPod().NamespacedName.String()
+
+			// Fetch raw inputs from the source (high contention path).
+			inputs, ok := d.fetchRawInputs(podMetric)
+			if !ok {
+				continue
+			}
+
+			// Calculate the comprehensive state (M/G/1, Reliability, Capacity).
+			state := d.calculatePodState(inputs, now)
+			refreshed[podID] = state
+			states[index] = state
+		}
+
+		// Phase 3: Write Lock (Update Cache)
+		if len(refreshed) > 0 {
+			d.mu.Lock()
+			// In high-concurrency scenarios, another thread might have updated the cache during Phase 2.
+			// Stomping with slightly newer data is acceptable.
+			maps.Copy(d.cache, refreshed)
+			d.mu.Unlock()
+		}
+	}
+
+	return states
+}
+
+// fetchRawInputs retrieves the metrics from the high-contention source.
+func (d *Detector) fetchRawInputs(podMetric backendmetrics.PodMetrics) (rawInputs, bool) {
+	ewmaMetrics := podMetric.GetEWMAMetrics()
+	if ewmaMetrics == nil {
+		return rawInputs{}, false
+	}
+
+	physicalMetrics := podMetric.GetMetrics()
+	measuredQueueSize := 0
+	if physicalMetrics != nil {
+		measuredQueueSize = physicalMetrics.WaitingQueueSize
+	}
+
+	// Requires the accessors added to EWMAMetrics.
+	return rawInputs{
+		arrivalRate:                  ewmaMetrics.GetArrivalRateEWMA(),
+		meanEffectiveServiceTime:     ewmaMetrics.GetMeanSojournTimeEWMA(),
+		varianceEffectiveServiceTime: ewmaMetrics.GetVarianceSojournTimeEWMA(),
+		measuredQueueSize:            measuredQueueSize,
+		sojournTimeSamples:           ewmaMetrics.GetSojournTimeSamples(),
+		lastSojournUpdate:            ewmaMetrics.GetLastSojournUpdate(),
+	}, true
+}
+
+// calculatePodState performs the eager calculation of derived metrics and reliability assessment.
+func (d *Detector) calculatePodState(inputs rawInputs, now time.Time) cachedPodState {
+	// Check stability (samples).
+	unstable := inputs.sojournTimeSamples < d.config.WarmUpSampleCount
+
+	// Check staleness (time since last update).
+	// We can have sufficient samples but still be stale (e.g., post-idle burst).
+	stale := !inputs.lastSojournUpdate.IsZero() && time.Since(inputs.lastSojournUpdate) > d.config.EWMAStalenessThreshold
+
+	// Calculate M/G/1 Details and Capacity (μ).
+	details := d.calculatePodDetails(inputs)
+	effectiveCapacity := 0.0
+	if inputs.meanEffectiveServiceTime > 0 {
+		effectiveCapacity = 1.0 / inputs.meanEffectiveServiceTime.Seconds()
+	}
+
+	return cachedPodState{
+		details:           details,
+		isReliable:        !unstable && !stale,
+		effectiveCapacity: effectiveCapacity,
+		arrivalRate:       inputs.arrivalRate,
+		timestamp:         now,
 	}
 }
 
 // calculatePodDetails interprets a pod's metrics using the Pollaczek-Khinchine formula for an M/G/1 queue to predict
 // its end-to-end latency, employing the Effective Service Time abstraction.
-func (d *Detector) calculatePodDetails(snapshot cachedPodMetrics) PodFullnessDetails {
-	meanServiceSec := snapshot.meanEffectiveServiceTime.Seconds()
+func (d *Detector) calculatePodDetails(inputs rawInputs) PodFullnessDetails {
+	meanServiceSec := inputs.meanEffectiveServiceTime.Seconds()
 	if meanServiceSec <= 1e-9 {
 		return PodFullnessDetails{} // Insufficient data (cold start)
 	}
 
 	// --- 1. Calculate Utilization (ρ) and CV ---
 	// ρ = λ * E[S_effective]
-	utilization := snapshot.arrivalRate * meanServiceSec
-	cv := calculateCV(meanServiceSec, snapshot.varianceEffectiveServiceTime)
+	utilization := inputs.arrivalRate * meanServiceSec
+	cv := calculateCV(meanServiceSec, inputs.varianceEffectiveServiceTime)
 
 	if utilization >= 1.0 {
 		return PodFullnessDetails{
@@ -429,7 +530,7 @@ func (d *Detector) calculatePodDetails(snapshot cachedPodMetrics) PodFullnessDet
 	// --- 2. Calculate Predicted Congestion Delay (W_q) ---
 	// Pollaczek-Khinchine formula: W_q = (λ * E[S^2]) / (2 * (1 - ρ))
 	// E[S^2] (Second Moment) = Var(S) + E[S]^2
-	secondMoment := snapshot.varianceEffectiveServiceTime + (meanServiceSec * meanServiceSec)
+	secondMoment := inputs.varianceEffectiveServiceTime + (meanServiceSec * meanServiceSec)
 
 	// Safety check against division by zero if utilization is extremely close to 1.0 due to float precision.
 	if (1 - utilization) < 1e-9 {
@@ -441,20 +542,17 @@ func (d *Detector) calculatePodDetails(snapshot cachedPodMetrics) PodFullnessDet
 		}
 	}
 
-	congestionDelaySec := (snapshot.arrivalRate * secondMoment) / (2 * (1 - utilization))
+	congestionDelaySec := (inputs.arrivalRate * secondMoment) / (2 * (1 - utilization))
 
 	// Ensure delay is non-negative (can slightly drift negative due to float precision or EWMA lag).
 	if congestionDelaySec < 0 {
 		congestionDelaySec = 0
 	}
 
-	// --- 3. Calculate Predicted Queue Length (L_q) and PMST ---
-	predictedQueueLength := snapshot.arrivalRate * congestionDelaySec // L_q = λ * W_q (Little's Law)
-	pmstSec := meanServiceSec + congestionDelaySec                    // PMST = E[S] + W_q
-
-	// --- 4. Calculate Queue Momentum ---
-	// Momentum = L_q - MeasuredQueueSize. We use the temporally consistent snapshot value.
-	queueMomentum := predictedQueueLength - float64(snapshot.measuredQueueSize)
+	// --- 3. Calculate Predicted Queue Length (L_q), PMST, and Queue Momentum ---
+	predictedQueueLength := inputs.arrivalRate * congestionDelaySec           // L_q = λ * W_q (Little's Law)
+	pmstSec := meanServiceSec + congestionDelaySec                            // PMST = E[S] + W_q
+	queueMomentum := predictedQueueLength - float64(inputs.measuredQueueSize) // Momentum = L_q - MeasuredQueueSize.
 
 	return PodFullnessDetails{
 		Utilization:              utilization,
@@ -469,95 +567,10 @@ func (d *Detector) calculatePodDetails(snapshot cachedPodMetrics) PodFullnessDet
 
 // calculateCV computes the Coefficient of Variation (CV).
 func calculateCV(mean, variance float64) float64 {
-	// Ensure non-negative variance due to potential floating point inaccuracies in EWMA updates.
+	// Ensure non-negative variance and non-zero mean due to potential floating point inaccuracies in EWMA updates.
 	if mean <= 1e-9 || variance <= 0 {
 		return 0
 	}
 	// CV = StandardDeviation / Mean = sqrt(Variance) / Mean
 	return math.Sqrt(variance) / mean
-}
-
-// getMetricSnapshots is the core of the internal caching logic. It safely orchestrates reads from the cache and lazy,
-// batched refreshes from the underlying high-contention metrics source.
-// It returns a slice of snapshots aligned (index-by-index) with the input pods slice.
-// If a pod is invalid or metrics are missing, the corresponding snapshot will be empty (zero value).
-func (d *Detector) getMetricSnapshots(pods []backendmetrics.PodMetrics) []cachedPodMetrics {
-	snapshots := make([]cachedPodMetrics, len(pods))
-	var podsToRefreshIndices []int
-	now := time.Now()
-
-	// Phase 1: Read Lock (Optimized for Cache Hits)
-	// Check the cache for all pods.
-	d.mu.RLock()
-	for i, podMetric := range pods {
-		if podMetric.GetPod() == nil {
-			continue
-		}
-		podID := podMetric.GetPod().NamespacedName.String()
-		cached, found := d.cache[podID]
-		if found && now.Sub(cached.timestamp) < d.cacheTTL {
-			snapshots[i] = cached // Cache HIT and VALID
-		} else {
-			podsToRefreshIndices = append(podsToRefreshIndices, i) // Cache MISS or STALE
-		}
-	}
-	d.mu.RUnlock()
-
-	// Phase 2: Refresh (No Lock Held During Metric Fetch)
-	// If all pods were handled, return. Otherwise, refresh only the missing or stale entries.
-	if len(podsToRefreshIndices) > 0 {
-		refreshed := make(map[string]cachedPodMetrics)
-		for _, index := range podsToRefreshIndices {
-			podMetric := pods[index]
-			podID := podMetric.GetPod().NamespacedName.String()
-
-			// Fetch metrics from the source. This involves contention on the source's lock.
-			ewmaMetrics := podMetric.GetEWMAMetrics()
-
-			// We require EWMA metrics to model the pod.
-			if ewmaMetrics == nil {
-				continue
-			}
-
-			// Fetch instantaneous physical metrics (for comparison/momentum).
-			// This ensures temporal consistency: the queue size is captured alongside the EWMA data.
-			physicalMetrics := podMetric.GetMetrics()
-			measuredQueueSize := 0
-			if physicalMetrics != nil {
-				measuredQueueSize = physicalMetrics.WaitingQueueSize
-			}
-
-			snapshot := cachedPodMetrics{
-				// We use Sojourn Time EWMAs as the Effective Service Time inputs.
-				arrivalRate:                  ewmaMetrics.GetArrivalRateEWMA(),
-				meanEffectiveServiceTime:     ewmaMetrics.GetMeanSojournTimeEWMA(),
-				varianceEffectiveServiceTime: ewmaMetrics.GetVarianceSojournTimeEWMA(),
-				measuredQueueSize:            measuredQueueSize,
-				timestamp:                    now,
-			}
-			refreshed[podID] = snapshot
-			snapshots[index] = snapshot
-		}
-
-		// Phase 3: Write Lock (Update Cache)
-		// Atomically update the cache with the newly fetched data.
-		if len(refreshed) > 0 {
-			d.mu.Lock()
-			maps.Copy(d.cache, refreshed)
-			d.mu.Unlock()
-		}
-	}
-
-	return snapshots
-}
-
-// clamp restricts a value to be within a specified range [min, max].
-func clamp(value, min, max float64) float64 {
-	if value < min {
-		return min
-	}
-	if value > max {
-		return max
-	}
-	return value
 }

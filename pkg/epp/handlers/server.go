@@ -76,7 +76,7 @@ type StreamingServer struct {
 // Specifically, there are fields related to the ext-proc protocol, and then fields related to the lifecycle of the request.
 // We should split these apart as this monolithic object exposes too much data to too many layers.
 type RequestContext struct {
-	TargetPod                 *backend.Pod
+	TargetPod                 schedulingtypes.Pod
 	TargetEndpoint            string
 	IncomingModelName         string
 	TargetModelName           string

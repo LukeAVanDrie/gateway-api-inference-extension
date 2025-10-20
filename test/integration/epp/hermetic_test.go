@@ -1174,11 +1174,7 @@ func BeforeSuite() func() {
 	schedulerConfig := scheduling.NewSchedulerConfig(profileHandler, map[string]*framework.SchedulerProfile{"default": defaultProfile})
 	scheduler := scheduling.NewSchedulerWithConfig(schedulerConfig)
 
-	sdConfig := saturationdetector.Config{
-		TargetUtilization: saturationdetector.DefaultTargetUtilization,
-		ProportionalGain:  saturationdetector.DefaultProportionalGain,
-		CachingTTL:        saturationdetector.DefaultCachingTTL,
-	}
+	sdConfig := saturationdetector.Config{}
 	// In a real scenario, you'd call sdConfig.ValidateAndApplyDefaults()
 	// but here we are using defaults, so we can skip the error check.
 	validatedSDConfig, _ := sdConfig.ValidateAndApplyDefaults()

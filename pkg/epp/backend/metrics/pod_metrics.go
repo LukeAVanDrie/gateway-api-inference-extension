@@ -92,10 +92,7 @@ func (pm *podMetrics) startRefreshLoop(ctx context.Context) {
 func (pm *podMetrics) refreshMetrics() error {
 	ctx, cancel := context.WithTimeout(context.Background(), fetchMetricsTimeout)
 	defer cancel()
-	updated, err := pm.pmc.FetchMetrics(ctx, pm.GetPod(), pm.GetMetrics())
-	if err != nil {
-		pm.logger.V(logutil.TRACE).Info("Failed to refreshed metrics:", "err", err)
-	}
+	updated, _ := pm.pmc.FetchMetrics(ctx, pm.GetPod(), pm.GetMetrics())
 	// Optimistically update metrics even if there was an error.
 	// The FetchMetrics can return an error for the following reasons:
 	// 1. As refresher is running in the background, it's possible that the pod is deleted but
@@ -126,6 +123,5 @@ func (*podMetrics) Keys() []string                         { return nil }
 
 func (pm *podMetrics) UpdateMetrics(updated *MetricsState) {
 	updated.UpdateTime = time.Now()
-	pm.logger.V(logutil.TRACE).Info("Refreshed metrics", "updated", updated)
 	pm.metrics.Store(updated)
 }

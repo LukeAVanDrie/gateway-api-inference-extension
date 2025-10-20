@@ -18,7 +18,6 @@ package requestcontrol
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -26,7 +25,6 @@ import (
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
@@ -58,7 +56,7 @@ type AdmissionController interface {
 
 // saturationDetector defines the minimal interface required for checking if the backend pool is saturated.
 type saturationDetector interface {
-	GetFullnessReport(ctx context.Context, candidatePods []backendmetrics.PodMetrics) saturationdetector.FullnessReport
+	IsSaturated(ctx context.Context, candidatePods []backendmetrics.PodMetrics) bool
 }
 
 // flowController defines the minimal interface required by FlowControlAdmissionController for enqueuing requests and
@@ -78,20 +76,12 @@ func rejectIfSheddableAndSaturated(
 ) error {
 	if requtil.IsSheddable(priority) {
 		logger := log.FromContext(ctx)
-		report := sd.GetFullnessReport(ctx, candidatePods)
-		targetUtilization := report.ControllerInternals.TargetUtilization
-
-		if report.SubsetUtilization >= targetUtilization {
-			logger.V(logutil.TRACE).Info(
-				"Request rejected: system utilization is at or above target and request is sheddable",
-				"requestID", reqCtx.SchedulingRequest.RequestId,
-				"subsetUtilization", report.SubsetUtilization,
-				"targetUtilization", targetUtilization)
+		if sd.IsSaturated(ctx, candidatePods) {
+			logger.V(logutil.TRACE).Info("Request rejected: system saturated and request is sheddable",
+				"requestID", reqCtx.SchedulingRequest.RequestId)
 			return errutil.Error{
 				Code: errutil.InferencePoolResourceExhausted,
-				Msg: fmt.Sprintf(
-					"system at or above target utilization (%.2f), sheddable request dropped, current utilization: %.2f",
-					targetUtilization, report.SubsetUtilization),
+				Msg:  "system saturated, sheddable request dropped",
 			}
 		}
 	}

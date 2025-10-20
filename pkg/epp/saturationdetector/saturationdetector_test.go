@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/types"
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
@@ -84,25 +85,32 @@ func (m *mockPodMetrics) GetMetrics() *backendmetrics.MetricsState {
 	return m.MetricsState
 }
 
-func (m *mockPodMetrics) String() string {
-	if m == nil || m.Pod == nil {
-		return "<nil mockPodMetrics>"
-	}
-	return m.Pod.NamespacedName.String()
+// mockPodOptions allows customizing the mock pod creation.
+type mockPodOptions struct {
+	Lambda            float64
+	MeanSojourn       float64
+	VarSojourn        float64
+	QueueSize         int
+	Samples           int64
+	LastSojournUpdate time.Time
 }
 
 // newMockPodMetrics creates a fully initialized mockPodMetrics for testing.
-// meanSojourn and varSojourn are expected in seconds (or seconds^2 for variance).
-func newMockPodMetrics(name string, lambda float64, meanSojourn, varSojourn float64, queueSize int) *mockPodMetrics {
+func newMockPodMetrics(name string, opts mockPodOptions) *mockPodMetrics {
 	ewma := backendmetrics.NewEWMAMetrics()
-	// Initialize arrival rate by faking one event.
-	if lambda > 0 {
+	// Initialize arrival rate.
+	if opts.Lambda > 0 {
+		// We must initialize the timestamp for the decay calculation to work correctly.
 		ewma.UpdateArrivalRateEWMA(time.Now())
-		// Adjust RawEWMA to match the desired lambda for testing purposes.
-		ewma.ArrivalRateRawEWMA = lambda * datalayer.ArrivalRateEWMAWindow.Seconds()
+		// Adjust RawEWMA to match the desired lambda for testing purposes (White-box setup).
+		ewma.ArrivalRateRawEWMA = opts.Lambda * datalayer.ArrivalRateEWMAWindow.Seconds()
 	}
-	ewma.MeanSojournTimeEWMA = time.Duration(meanSojourn * float64(time.Second))
-	ewma.VarianceSojournTimeEWMA = varSojourn
+	ewma.MeanSojournTimeEWMA = time.Duration(opts.MeanSojourn * float64(time.Second))
+	ewma.VarianceSojournTimeEWMA = opts.VarSojourn
+
+	// Set stabilization inputs (requires setters on EWMAMetrics for testing).
+	ewma.SetSojournTimeSamples(opts.Samples)
+	ewma.SetLastSojournUpdate(opts.LastSojournUpdate)
 
 	return &mockPodMetrics{
 		Pod: &backend.Pod{
@@ -110,9 +118,19 @@ func newMockPodMetrics(name string, lambda float64, meanSojourn, varSojourn floa
 		},
 		EWMAMetrics: ewma,
 		MetricsState: &backendmetrics.MetricsState{
-			WaitingQueueSize: queueSize,
+			WaitingQueueSize: opts.QueueSize,
 		},
 	}
+}
+
+// Helper to create a standard mock pod (μ=10) easily.
+func newStandardMockPod(name string, lambda float64, samples int64) *mockPodMetrics {
+	return newMockPodMetrics(name, mockPodOptions{
+		Lambda:      lambda,
+		MeanSojourn: 0.1,
+		VarSojourn:  0.01, // CV=1
+		Samples:     samples,
+	})
 }
 
 // --- Unit Tests: Mathematical Formulas ---
@@ -182,99 +200,6 @@ func TestCalculateCV(t *testing.T) {
 	}
 }
 
-// TestCalculatePControllerOutput validates the P-controller logic (Error Signal and Dispatch Probability).
-func TestCalculatePControllerOutput(t *testing.T) {
-	t.Parallel()
-
-	const (
-		Target80 = 0.8
-		Kp_5     = 5.0
-		Kp_10    = 10.0
-		MinP_01  = 0.01
-		MinP_05  = 0.05
-	)
-
-	tests := []struct {
-		name               string
-		config             Config
-		currentUtilization float64
-		expected           PControllerInternals
-	}{
-		{
-			name:               "Well below target (Kp=10)",
-			config:             Config{TargetUtilization: Target80, ProportionalGain: Kp_10},
-			currentUtilization: 0.5,
-			// Error = 0.8 - 0.5 = 0.3. Prob = 10 * 0.3 = 3.0 (clamped to 1.0).
-			expected: PControllerInternals{
-				TargetUtilization:   Target80,
-				CurrentUtilization:  0.5,
-				ErrorSignal:         0.3,
-				DispatchProbability: 1.0,
-			},
-		},
-		{
-			name:               "Slightly below target (Kp=10)",
-			config:             Config{TargetUtilization: Target80, ProportionalGain: Kp_10},
-			currentUtilization: 0.75,
-			// Error = 0.8 - 0.75 = 0.05. Prob = 10 * 0.05 = 0.5.
-			expected: PControllerInternals{
-				TargetUtilization:   Target80,
-				CurrentUtilization:  0.75,
-				ErrorSignal:         0.05,
-				DispatchProbability: 0.5,
-			},
-		},
-		{
-			name:               "At target (Kp=10)",
-			config:             Config{TargetUtilization: Target80, ProportionalGain: Kp_10},
-			currentUtilization: 0.8,
-			// Error = 0. Prob = 0.
-			expected: PControllerInternals{
-				TargetUtilization:   Target80,
-				CurrentUtilization:  0.8,
-				ErrorSignal:         0.0,
-				DispatchProbability: 0.0,
-			},
-		},
-		{
-			name:               "Above target (Kp=10)",
-			config:             Config{TargetUtilization: Target80, ProportionalGain: Kp_10},
-			currentUtilization: 0.9,
-			// Error = -0.1. Prob = -1.0 (clamped to 0.0).
-			expected: PControllerInternals{
-				TargetUtilization:   Target80,
-				CurrentUtilization:  0.9,
-				ErrorSignal:         -0.1,
-				DispatchProbability: 0.0,
-			},
-		},
-		{
-			name:               "Lower Kp (Kp=5), slightly below target",
-			config:             Config{TargetUtilization: Target80, ProportionalGain: Kp_5},
-			currentUtilization: 0.75,
-			// Error = 0.05. Prob = 5 * 0.05 = 0.25. (Less aggressive response)
-			expected: PControllerInternals{
-				TargetUtilization:   Target80,
-				CurrentUtilization:  0.75,
-				ErrorSignal:         0.05,
-				DispatchProbability: 0.25,
-			},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			d := NewDetector(tc.config, logr.Discard())
-			got := d.calculatePControllerOutput(tc.currentUtilization)
-			if diff := cmp.Diff(tc.expected, got, float64EqualityOpt); diff != "" {
-				t.Errorf("calculatePControllerOutput() mismatch for currentUtilization=%v (-want +got):\n%s",
-					tc.currentUtilization, diff)
-			}
-		})
-	}
-}
-
 // TestCalculatePodDetails_MG1 validates the core M/G/1 calculations (Pollaczek-Khinchine formula).
 func TestCalculatePodDetails_MG1(t *testing.T) {
 	t.Parallel()
@@ -286,13 +211,13 @@ func TestCalculatePodDetails_MG1(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		input    cachedPodMetrics
+		input    rawInputs
 		expected PodFullnessDetails
 	}{
 		{
 			name: "M/M/1 equivalent (CV=1) at 80% utilization",
 			// λ=8 req/s, E[S]=0.1s (μ=10 req/s). ρ=0.8. Var(S)=E[S]^2=0.01 for M/M/1.
-			input: cachedPodMetrics{
+			input: rawInputs{
 				arrivalRate:                  8.0,
 				meanEffectiveServiceTime:     E_S_100ms,
 				varianceEffectiveServiceTime: 0.01,
@@ -310,9 +235,9 @@ func TestCalculatePodDetails_MG1(t *testing.T) {
 			},
 		},
 		{
-			name: "High Variance (CV=2) at 80% utilization (LLM-like)",
-			// Same ρ=0.8, but CV=2. Var(S) = (CV*E[S])^2 = (2*0.1)^2 = 0.04.
-			input: cachedPodMetrics{
+			name: "High Variance (CV=2) at 80% utilization",
+			// ρ=0.8. CV=2. Var(S)=0.04.
+			input: rawInputs{
 				arrivalRate:                  8.0,
 				meanEffectiveServiceTime:     E_S_100ms,
 				varianceEffectiveServiceTime: 0.04,
@@ -332,7 +257,7 @@ func TestCalculatePodDetails_MG1(t *testing.T) {
 		{
 			name: "Low Variance (Deterministic, CV=0) at 80% utilization",
 			// ρ=0.8, CV=0. Var(S)=0.
-			input: cachedPodMetrics{
+			input: rawInputs{
 				arrivalRate:                  8.0,
 				meanEffectiveServiceTime:     E_S_100ms,
 				varianceEffectiveServiceTime: Var_S_Zero,
@@ -350,7 +275,7 @@ func TestCalculatePodDetails_MG1(t *testing.T) {
 		},
 		{
 			name: "Idle system (λ=0)",
-			input: cachedPodMetrics{
+			input: rawInputs{
 				arrivalRate:                  0.0,
 				meanEffectiveServiceTime:     E_S_100ms,
 				varianceEffectiveServiceTime: 0.01,
@@ -368,7 +293,7 @@ func TestCalculatePodDetails_MG1(t *testing.T) {
 		{
 			name: "Negative Queue Momentum (recovering system)",
 			// λ=4 (ρ=0.4), E[S]=0.1, Var(S)=0.01 (CV=1). MeasuredQueue=10.
-			input: cachedPodMetrics{
+			input: rawInputs{
 				arrivalRate:                  4.0,
 				meanEffectiveServiceTime:     E_S_100ms,
 				varianceEffectiveServiceTime: 0.01,
@@ -389,10 +314,10 @@ func TestCalculatePodDetails_MG1(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			d := &Detector{} // Detector instance is stateless for this calculation
+			d := &Detector{} // Stateless for this calculation
 			got := d.calculatePodDetails(tc.input)
 			if diff := cmp.Diff(tc.expected, got, approxDurationComparer, float64EqualityOpt); diff != "" {
-				t.Errorf("calculatePodDetails() mismatch for input=%+v (-want +got):\n%s", tc.input, diff)
+				t.Errorf("calculatePodDetails() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -402,18 +327,17 @@ func TestCalculatePodDetails_MG1(t *testing.T) {
 func TestCalculatePodDetails_EdgeCases(t *testing.T) {
 	t.Parallel()
 	d := &Detector{}
-
 	const E_S_100ms = 100 * time.Millisecond
 
 	tests := []struct {
 		name     string
-		input    cachedPodMetrics
+		input    rawInputs
 		expected PodFullnessDetails
 	}{
 		{
 			name: "Overload (ρ > 1.0)",
 			// λ=12, E[S]=0.1 (μ=10). ρ=1.2.
-			input: cachedPodMetrics{
+			input: rawInputs{
 				arrivalRate:              12.0,
 				meanEffectiveServiceTime: E_S_100ms,
 			},
@@ -426,7 +350,7 @@ func TestCalculatePodDetails_EdgeCases(t *testing.T) {
 		{
 			name: "Saturation (ρ = 1.0)",
 			// λ=10, E[S]=0.1 (μ=10). ρ=1.0.
-			input: cachedPodMetrics{
+			input: rawInputs{
 				arrivalRate:              10.0,
 				meanEffectiveServiceTime: E_S_100ms,
 			},
@@ -439,7 +363,7 @@ func TestCalculatePodDetails_EdgeCases(t *testing.T) {
 		{
 			name: "Near Saturation (ρ ≈ 1.0, floating point safety)",
 			// ρ = 1 - 1e-10. (1 - ρ) = 1e-10.
-			input: cachedPodMetrics{
+			input: rawInputs{
 				// Use precise definition of the input utilization
 				arrivalRate:              10.0 * (1.0 - 1e-10),
 				meanEffectiveServiceTime: E_S_100ms,
@@ -453,7 +377,7 @@ func TestCalculatePodDetails_EdgeCases(t *testing.T) {
 		},
 		{
 			name: "Cold Start (E[S]=0)",
-			input: cachedPodMetrics{
+			input: rawInputs{
 				arrivalRate:              5.0,
 				meanEffectiveServiceTime: 0,
 			},
@@ -465,6 +389,7 @@ func TestCalculatePodDetails_EdgeCases(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := d.calculatePodDetails(tc.input)
+			// Use slightly looser tolerance for the utilization comparison near 1.0.
 			if diff := cmp.Diff(tc.expected, got, approxDurationComparer, cmpopts.EquateApprox(1e-8, 0.0)); diff != "" {
 				t.Errorf("calculatePodDetails() edge case mismatch for input=%+v (-want +got):\n%s", tc.input, diff)
 			}
@@ -472,375 +397,220 @@ func TestCalculatePodDetails_EdgeCases(t *testing.T) {
 	}
 }
 
-// --- Unit Tests: Aggregation (GetFullnessReport) ---
+// --- Behavioral Tests: Bang-Bang Controller (Hysteresis) ---
 
-// TestGetFullnessReport_AggregateUtilization validates the aggregate utilization calculation (Σλᵢ / Σμᵢ).
-func TestGetFullnessReport_AggregateUtilization(t *testing.T) {
-	t.Parallel()
+// TestDetector_HysteresisBehavior validates the state transitions of the Bang-Bang controller.
+func TestDetector_HysteresisBehavior(t *testing.T) {
+	// We do not use t.Parallel() as this test manipulates the internal state of a single detector instance sequentially.
 
-	// Standard pod definitions based on E[S] (Effective Service Time):
-	// PodA: μ=10 req/s (E[S]=0.1s)
-	// PodB: μ=5 req/s (E[S]=0.2s)
-	// PodC: μ=20 req/s (E[S]=0.05s)
+	const (
+		HWM = 0.85 // High Watermark (TargetUtilization)
+		LWM = 0.75 // Low Watermark (ResumeUtilization)
+	)
+
+	config := Config{
+		TargetUtilization: HWM,
+		ResumeUtilization: LWM,
+		CachingTTL:        time.Hour, // Ensure caching doesn't interfere.
+		WarmUpSampleCount: 1,         // Ensure metrics are reliable immediately.
+	}
+	// Use a real clock (nil) as time control is not needed for hysteresis behavior.
+	d := NewDetector(config, nil, logr.Discard())
+	ctx := context.Background()
+
+	// Helper to create a pod pool resulting in a specific utilization.
+	// We use 1 pod with μ=10 (E[S]=0.1s). We set λ such that λ/10 = utilization.
+	createPool := func(utilization float64) []backendmetrics.PodMetrics {
+		lambda := utilization * 10.0
+		return []backendmetrics.PodMetrics{
+			newStandardMockPod("P1", lambda, 10),
+		}
+	}
 
 	tests := []struct {
-		name        string
-		pods        []backendmetrics.PodMetrics
-		expectedRho float64
+		name              string
+		utilization       float64
+		expectSaturated   bool
+		expectStateChange bool
 	}{
-		{
-			name: "Homogeneous Pool",
-			// 3x PodA. Total μ = 30. λ=5+5+5=15. ρ = 15/30 = 0.5.
-			pods: []backendmetrics.PodMetrics{
-				newMockPodMetrics("A1", 5.0, 0.1, 0.01, 0),
-				newMockPodMetrics("A2", 5.0, 0.1, 0.01, 0),
-				newMockPodMetrics("A3", 5.0, 0.1, 0.01, 0),
-			},
-			expectedRho: 0.5,
-		},
-		{
-			name: "Heterogeneous Pool (Capacity Weighting)",
-			// PodA (μ=10), PodB (μ=5), PodC (μ=20). Total μ = 35.
-			// λ=8+2+10=20. ρ = 20/35 ≈ 0.5714.
-			pods: []backendmetrics.PodMetrics{
-				newMockPodMetrics("A1", 8.0, 0.1, 0.01, 0),
-				newMockPodMetrics("B1", 2.0, 0.2, 0.04, 0),
-				newMockPodMetrics("C1", 10.0, 0.05, 0.0025, 0),
-			},
-			expectedRho: 20.0 / 35.0,
-		},
-		{
-			name: "Mixed State (One Overloaded)",
-			// P1 (μ=10, λ=5, ρ=0.5), P2 (μ=10, λ=15, ρ=1.5)
-			// Σλ = 20. Σμ = 20. ρ = 1.0. The aggregate utilization is correct even if individual pods are overloaded.
-			pods: []backendmetrics.PodMetrics{
-				newMockPodMetrics("P1", 5.0, 0.1, 0.01, 0),
-				newMockPodMetrics("P2_over", 15.0, 0.1, 0.01, 0),
-			},
-			expectedRho: 1.0,
-		},
-		{
-			name: "Pool with Cold/Unresponsive Pod (μ=0)",
-			// PodA (μ=10), PodB (μ=5), ColdPod (μ=0). Total μ = 15.
-			// λ=5+5+5=15. ρ = 15/15 = 1.0.
-			pods: []backendmetrics.PodMetrics{
-				newMockPodMetrics("A1", 5.0, 0.1, 0.01, 0),
-				newMockPodMetrics("B1", 5.0, 0.2, 0.04, 0),
-				newMockPodMetrics("Cold1", 5.0, 0.0, 0.0, 0), // E[S]=0
-			},
-			expectedRho: 1.0,
-		},
-		{
-			name: "Pool with Missing Metrics",
-			// PodA (μ=10), Missing (μ=0). Total μ = 10. λ=5. ρ = 5/10 = 0.5.
-			pods: []backendmetrics.PodMetrics{
-				newMockPodMetrics("A1", 5.0, 0.1, 0.01, 0),
-				// Mock with no EWMAMetrics initialized.
-				&mockPodMetrics{Pod: &backend.Pod{NamespacedName: types.NamespacedName{Name: "Missing", Namespace: "default"}}},
-			},
-			expectedRho: 0.5,
-		},
-		{
-			name:        "Empty Pool",
-			pods:        []backendmetrics.PodMetrics{},
-			expectedRho: 0.0,
-		},
-		{
-			name: "Zero Capacity Pool, No Arrivals",
-			// Total μ=0. λ=0. ρ=0.
-			pods: []backendmetrics.PodMetrics{
-				newMockPodMetrics("Cold1", 0.0, 0.0, 0.0, 0),
-			},
-			expectedRho: 0.0,
-		},
-		{
-			name: "Zero Capacity Pool, With Arrivals (Sentinel Value)",
-			// Total μ=0. λ=5. ρ = sentinel 1.5.
-			pods: []backendmetrics.PodMetrics{
-				newMockPodMetrics("Cold1", 5.0, 0.0, 0.0, 0),
-			},
-			expectedRho: 1.5,
-		},
+		{"1_Start_Below_LWM", 0.5, false, false},
+		{"2_Ramp_To_HWM_Boundary", HWM - 0.001, false, false},
+		{"3_Cross_HWM_Engage", HWM + 0.001, true, true},
+		{"4_Saturated_Ramp_Higher", 0.95, true, false},
+		{"5_Saturated_Drop_To_LWM_Boundary", LWM + 0.001, true, false}, // Still in Hysteresis band
+		{"6_Cross_LWM_Resume", LWM - 0.001, false, true},
+		{"7_Resumed_Ramp_In_Band", 0.80, false, false},
 	}
+
+	// Track the internal state across iterations.
+	previousInternalState := d.isSaturated.Load()
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			// Config values (TargetUtilization, Kp, TTL) do not affect the utilization calculation itself.
-			d := NewDetector(Config{
-				MinDispatchProbability: 0, // Test without the leaky bucket effect.
-			}, logr.Discard())
-			report := d.GetFullnessReport(context.Background(), tc.pods)
-			assert.InDelta(t, tc.expectedRho, report.SubsetUtilization, 1e-2,
-				"GetFullnessReport() Aggregate Utilization (ρ_subset) mismatch for pods=%v",
-				tc.pods)
+			pool := createPool(tc.utilization)
+			isSaturated := d.IsSaturated(ctx, pool)
+
+			assert.Equal(t, tc.expectSaturated, isSaturated, "IsSaturated() output mismatch for utilization")
+
+			// Verify the internal state matches the output.
+			internalState := d.isSaturated.Load()
+			assert.Equal(t, isSaturated, internalState, "Internal atomic state mismatch")
+
+			// Verify if the state changed as expected.
+			stateChanged := internalState != previousInternalState
+			assert.Equal(t, tc.expectStateChange, stateChanged, "State transition (hysteresis) did not occur as expected")
+
+			previousInternalState = internalState
 		})
 	}
 }
 
-// --- Behavioral Tests: P-Controller Application (IsSaturated) ---
+// --- Behavioral Tests: Stabilization (Stateful Probing) ---
 
-// TestIsSaturated_ProbabilisticBehavior validates the statistical behavior of the P-controller's probabilistic output.
-func TestIsSaturated_ProbabilisticBehavior(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name            string
-		targetUtil      float64
-		kp              float64
-		actualUtil      float64
-		expectedSatRate float64 // Expected saturation rate (1 - DispatchProbability)
-		minDispatch     float64 // Optional MinDispatchProbability
-	}{
-		// Kp=10, Target=0.8
-		{
-			name:            "P=1.0 (Util=0.5)",
-			targetUtil:      0.8,
-			kp:              10.0,
-			actualUtil:      0.5,
-			expectedSatRate: 0.0, // Error=0.3, Prob=3.0 (clamped 1.0)
-		},
-		{
-			name:            "P=0.5 (Util=0.75)",
-			targetUtil:      0.8,
-			kp:              10.0,
-			actualUtil:      0.75,
-			expectedSatRate: 0.5, // Error=0.05, Prob=0.5
-		},
-		{
-			name:            "P=0.0 (Util=0.8)",
-			targetUtil:      0.8,
-			kp:              10.0,
-			actualUtil:      0.8,
-			expectedSatRate: 1.0, // Error=0.0, Prob=0.0
-		},
-		{
-			name:            "P=0.0 (Util=0.9)",
-			targetUtil:      0.8,
-			kp:              10.0,
-			actualUtil:      0.9,
-			expectedSatRate: 1.0, // Error=-0.1, Prob=-1.0 (clamped 0.0)
-		},
-		// Kp=10, Target=0.8, MinDispatchProbability=0.01
-		{
-			name:            "Above target, Leaky Bucket 0.01",
-			targetUtil:      0.8,
-			kp:              10.0,
-			actualUtil:      0.9,
-			expectedSatRate: 0.99, // DispatchProbability is lower bounded by 0.01
-			minDispatch:     0.01,
-		},
-		// Kp=10, Target=0.8, MinDispatchProbability=0.05
-		{
-			name:            "At target, Leaky Bucket 0.05",
-			targetUtil:      0.8,
-			kp:              10.0,
-			actualUtil:      0.8,
-			expectedSatRate: 0.95, // DispatchProbability is lower bounded by 0.05
-			minDispatch:     0.05,
-		},
-		{
-			name:            "Below target, Leaky Bucket no effect",
-			targetUtil:      0.8,
-			kp:              10.0,
-			actualUtil:      0.75,
-			expectedSatRate: 0.5, // Calculated Prob 0.5 > 0.01
-			minDispatch:     0.01,
-		},
-	}
+// TestDetector_StatefulProbing validates the deadlock prevention mechanism using a FakeClock.
+func TestDetector_StatefulProbing(t *testing.T) {
+	// We do not use t.Parallel() as this test relies on precise control over the FakeClock and sequential state updates.
 
 	const (
-		iterations = 5000
-		tolerance  = 0.05 // Allow a 5% margin of error for statistical validation.
+		ProbeInt      = 500 * time.Millisecond
+		StaleThr      = 30 * time.Second
+		WarmUpSamples = 10
 	)
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			config := Config{
-				TargetUtilization:      tc.targetUtil,
-				ProportionalGain:       tc.kp,
-				MinDispatchProbability: tc.minDispatch,
-				CachingTTL:             time.Hour, // Ensure caching doesn't interfere.
-			}
-			d := NewDetector(config, logr.Discard())
+	// Setup FakeClock for deterministic time control.
+	startTime := time.Now()
+	fakeClock := clocktesting.NewFakeClock(startTime)
 
-			// Create a mock scenario that results in the desired utilization.
-			// We use 1 pod with μ=10 (E[S]=0.1s). We set λ such that λ/10 = actualUtil.
-			lambda := tc.actualUtil * 10.0
-			pods := []backendmetrics.PodMetrics{
-				newMockPodMetrics("P1", lambda, 0.1, 0.01, 0),
-			}
-
-			saturatedCount := 0
-			for range iterations {
-				if d.IsSaturated(context.Background(), pods) {
-					saturatedCount++
-				}
-			}
-
-			observedSatRate := float64(saturatedCount) / float64(iterations)
-
-			// For deterministic cases (0.0 or 1.0), we expect an exact match.
-			if tc.expectedSatRate == 0.0 || tc.expectedSatRate == 1.0 {
-				assert.Equal(t, tc.expectedSatRate, observedSatRate, "Expected deterministic outcome (P=0.0 or P=1.0)")
-			} else {
-				assert.InDelta(t, tc.expectedSatRate, observedSatRate, tolerance,
-					"Statistical validation failed: observed saturation rate outside expected margin")
-			}
-		})
+	config := Config{
+		TargetUtilization:      0.85,
+		ResumeUtilization:      0.75,
+		CachingTTL:             time.Microsecond, // Force cache refresh on every call for immediate metric updates.
+		ProbeInterval:          ProbeInt,
+		EWMAStalenessThreshold: StaleThr,
+		WarmUpSampleCount:      WarmUpSamples,
 	}
+	d := NewDetector(config, fakeClock, logr.Discard())
+	ctx := context.Background()
+
+	// 1. Initial State (Cold Start - Unstable)
+	// Pod has 0 samples.
+	pod := newStandardMockPod("P1", 5.0, 0)
+	pool := []backendmetrics.PodMetrics{pod}
+
+	// First call should trigger a probe because metrics are unstable (0 samples < 10).
+	isSaturated1 := d.IsSaturated(ctx, pool)
+	require.False(t, isSaturated1, "Should force probe (return false) on initial cold start")
+
+	// Verify probe time was updated.
+	d.probeMu.Lock()
+	lastProbe := d.lastProbeTime
+	d.probeMu.Unlock()
+	require.Equal(t, startTime, lastProbe, "Probe timestamp should be updated on forced probe")
+
+	// 2. Subsequent calls (Still Unstable, Interval not elapsed)
+	// Advance time slightly, but less than ProbeInterval.
+	fakeClock.Step(ProbeInt / 2)
+	isSaturated2 := d.IsSaturated(ctx, pool)
+	require.True(t, isSaturated2, "Should block (return true) if unstable and probe interval has not elapsed")
+
+	// 3. Interval Elapsed (Still Unstable)
+	// Advance time past the interval.
+	fakeClock.Step(ProbeInt/2 + time.Millisecond)
+	isSaturated3 := d.IsSaturated(ctx, pool)
+	require.False(t, isSaturated3, "Should force probe again when interval elapses while still unstable")
+
+	// 4. Transition to Stable but Stale
+	// Update pod metrics to be stable (>= 10 samples), but set the update time far in the past relative to the clock.
+	pod.EWMAMetrics.SetSojournTimeSamples(WarmUpSamples)
+	// Set the last update time significantly before the current fakeClock time.
+	pod.EWMAMetrics.SetLastSojournUpdate(fakeClock.Now().Add(-StaleThr * 2))
+
+	// Advance time past the next interval.
+	fakeClock.Step(ProbeInt + time.Millisecond)
+	isSaturated4 := d.IsSaturated(ctx, pool)
+	require.False(t, isSaturated4, "Should force probe if metrics are stale")
+
+	// 5. Subsequent call (Stale, Interval not elapsed)
+	fakeClock.Step(ProbeInt / 2)
+	isSaturated5 := d.IsSaturated(ctx, pool)
+	require.True(t, isSaturated5, "Should block if stale and probe interval has not elapsed")
+
+	// 6. Transition to Reliable (Stable and Fresh)
+	// Update metrics to be fresh relative to the clock.
+	pod.EWMAMetrics.SetLastSojournUpdate(fakeClock.Now())
+
+	// The system should now revert to Bang-Bang control. Utilization is 0.5 (5.0/10.0), so it should not block.
+	isSaturated6 := d.IsSaturated(ctx, pool)
+	require.False(t, isSaturated6, "Should use Bang-Bang control (return false) when metrics are reliable and utilization is low")
+
+	// 7. Reliable and Saturated
+	// Increase load to force saturation.
+	pod = newStandardMockPod("P1", 9.5, WarmUpSamples) // Util=0.95
+	pod.EWMAMetrics.SetLastSojournUpdate(fakeClock.Now())
+	pool = []backendmetrics.PodMetrics{pod}
+
+	isSaturated7 := d.IsSaturated(ctx, pool)
+	require.True(t, isSaturated7, "Should use Bang-Bang control (return true) when metrics are reliable and utilization is high")
 }
 
 // --- Concurrency and Caching Tests ---
 
-// TestDetector_CachingBehavior validates the internal TTL cache mechanism and temporal consistency.
+// TestDetector_CachingBehavior validates the internal TTL cache mechanism using a FakeClock.
 func TestDetector_CachingBehavior(t *testing.T) {
-	// We cannot use t.Parallel() here because we are testing time-sensitive behavior (TTL expiry) on shared state.
+	// We do not use t.Parallel() here because we require precise control over the FakeClock.
 
 	const cacheTTL = 50 * time.Millisecond
+	startTime := time.Now()
+	fakeClock := clocktesting.NewFakeClock(startTime)
+
 	config := Config{
-		MinDispatchProbability: 0, // Test without leaky bucket effect.
-		CachingTTL:             cacheTTL,
+		CachingTTL:        cacheTTL,
+		WarmUpSampleCount: 1, // Ensure reliability doesn't interfere.
 	}
-	d := NewDetector(config, logr.Discard())
+	d := NewDetector(config, fakeClock, logr.Discard())
 
-	// Initialize mocks with specific values and access counters (starting at 0).
-	pod1 := newMockPodMetrics("Pod1", 1.0, 0.1, 0.01, 5)
-	pod2 := newMockPodMetrics("Pod2", 2.0, 0.2, 0.04, 10)
-	pods := []backendmetrics.PodMetrics{pod1, pod2}
-
+	// Initialize mocks.
+	pod1 := newStandardMockPod("Pod1", 1.0, 10) // Util=0.1
+	pod1.MetricsState.WaitingQueueSize = 5
+	pods := []backendmetrics.PodMetrics{pod1}
 	ctx := context.Background()
 
 	// 1. Initial Call (Cache Miss)
 	report1 := d.GetFullnessReport(ctx, pods)
 	require.NotEmpty(t, report1.PerPodDetails, "Report should not be empty on initial call")
-	assert.Equal(t, 1, pod1.EWMAAccessCount, "Pod1 EWMA metrics should be accessed once on cache miss")
-	assert.Equal(t, 1, pod1.MetricsAccessCount, "Pod1 physical metrics should be accessed once on cache miss")
-	assert.Equal(t, 1, pod2.EWMAAccessCount, "Pod2 EWMA metrics should be accessed once on cache miss")
+	assert.Equal(t, 1, pod1.EWMAAccessCount, "Pod1 metrics should be accessed once on cache miss")
 
-	// Verify data is correctly cached (Temporal Consistency Check)
+	// Verify data is correctly cached (Eager Calculation).
 	d.mu.RLock()
 	cached1, ok1 := d.cache["default/Pod1"]
 	d.mu.RUnlock()
-	require.True(t, ok1, "Pod1 should be in the cache")
-	assert.Equal(t, 5, cached1.measuredQueueSize, "Pod1 measuredQueueSize should be cached correctly")
+	require.True(t, ok1, "Pod1 must be cached after the initial fetch")
+	assert.InDelta(t, 0.1, cached1.Details.Utilization, 1e-5, "Pod1 utilization should be eagerly calculated and cached")
+	assert.Equal(t, startTime, cached1.timestamp, "Cache timestamp should match the clock time")
 
 	// 2. Subsequent Call (Cache Hit)
-	// Update the underlying metrics to ensure the cached values are returned if the cache works.
-	pod1.EWMAMetrics.ArrivalRateRawEWMA = 99.0
+	// Update the underlying metrics to verify cache is working.
+	pod1.EWMAMetrics.ArrivalRateRawEWMA = 99.0 * datalayer.ArrivalRateEWMAWindow.Seconds() // Force high utilization
 	pod1.MetricsState.WaitingQueueSize = 99
 
-	report2 := d.GetFullnessReport(ctx, pods)
-	assert.Equal(t, 1, pod1.EWMAAccessCount, "Pod1 EWMA metrics should NOT be accessed again on cache hit")
-	assert.Equal(t, 1, pod1.MetricsAccessCount, "Pod1 physical metrics should NOT be accessed again on cache hit")
+	fakeClock.Step(cacheTTL / 2) // Advance time, but stay within TTL.
 
-	// Verify the report reflects the original (cached) data, not the updated underlying data.
-	details1 := report2.PerPodDetails["default/Pod1"]
-	// Original ρ = 1.0 * 0.1 = 0.1
-	assert.InDelta(t, 0.1, details1.Utilization, 1e-5, "Report should reflect cached utilization")
-	// Original momentum calculation depends on original L_q and original queue size (5).
-	assert.Greater(t, details1.QueueMomentum, -10.0,
-		"Report should reflect cached measuredQueueSize (Temporal Consistency)")
+	report2 := d.GetFullnessReport(ctx, pods)
+	assert.Equal(t, 1, pod1.EWMAAccessCount, "Pod1 metrics should NOT be accessed again on cache hit")
+
+	// Verify the report reflects the original (cached) data.
+	details2 := report2.PerPodDetails["default/Pod1"]
+	assert.InDelta(t, 0.1, details2.Utilization, 1e-5, "Report should reflect cached utilization (Temporal Consistency)")
 
 	// 3. Call after TTL Expiry (Cache Stale)
-	// We use time.Sleep here to test the actual time-based expiry.
-	time.Sleep(cacheTTL + 5*time.Millisecond)
+	fakeClock.Step(cacheTTL/2 + time.Millisecond) // Advance time past TTL.
 
 	report3 := d.GetFullnessReport(ctx, pods)
-	assert.Equal(t, 2, pod1.EWMAAccessCount, "Pod1 EWMA metrics should be accessed again after TTL expiry")
-	assert.Equal(t, 2, pod1.MetricsAccessCount, "Pod1 physical metrics should be accessed again after TTL expiry")
+	assert.Equal(t, 2, pod1.EWMAAccessCount, "Pod1 metrics should be accessed again after TTL expiry")
 
 	// Verify the report reflects the new underlying data.
 	details3 := report3.PerPodDetails["default/Pod1"]
-	// New ρ should be around (99.0 / 5.0) * 0.1 = 1.98. We check it's substantially larger than the original.
-	assert.Greater(t, details3.Utilization, details1.Utilization+1.0,
-		"Utilization after refresh should be significantly higher")
-	assert.Less(t, details3.Utilization, 2.0, "Utilization after refresh should be close to 1.98")
-}
-
-// TestDetector_Caching_MixedPool validates batch updates when some pods hit and others miss the cache.
-func TestDetector_Caching_MixedPool(t *testing.T) {
-	// We cannot use t.Parallel() here as we manipulate the internal state (cache timestamps) non-atomically for testing.
-
-	const cacheTTL = 100 * time.Millisecond
-	d := NewDetector(Config{CachingTTL: cacheTTL}, logr.Discard())
-	ctx := context.Background()
-
-	podA := newMockPodMetrics("PodA", 1.0, 0.1, 0.01, 0)
-	podB := newMockPodMetrics("PodB", 1.0, 0.1, 0.01, 0)
-	podC := newMockPodMetrics("PodC", 1.0, 0.1, 0.01, 0)
-
-	// Prime the cache for A and B.
-	d.GetFullnessReport(ctx, []backendmetrics.PodMetrics{podA, podB})
-	require.Equal(t, 1, podA.EWMAAccessCount, "Initial access count for PodA should be 1")
-	require.Equal(t, 1, podB.EWMAAccessCount, "Initial access count for PodB should be 1")
-
-	// Manually adjust timestamp of A to be just outside the TTL window (making it stale).
-	// This is a white-box technique used here to avoid relying on time.Sleep for deterministic testing of staleness.
-	d.mu.Lock()
-	if cachedA, ok := d.cache["default/PodA"]; ok {
-		cachedA.timestamp = time.Now().Add(-cacheTTL - time.Millisecond)
-		d.cache["default/PodA"] = cachedA
-	}
-	d.mu.Unlock()
-
-	// Request report for A (Stale), B (Hit), C (Miss).
-	d.GetFullnessReport(ctx, []backendmetrics.PodMetrics{podA, podB, podC})
-
-	assert.Equal(t, 2, podA.EWMAAccessCount, "PodA (Stale) should be refreshed")
-	assert.Equal(t, 1, podB.EWMAAccessCount, "PodB (Hit) should NOT be refreshed")
-	assert.Equal(t, 1, podC.EWMAAccessCount, "PodC (Miss) should be fetched and cached")
-
-	d.mu.RLock()
-	_, okC := d.cache["default/PodC"]
-	d.mu.RUnlock()
-	assert.True(t, okC, "PodC should be added to cache")
-}
-
-// TestDetector_HandlingInvalidInputs validates robustness against nil inputs.
-func TestDetector_HandlingInvalidInputs(t *testing.T) {
-	t.Parallel()
-
-	cfg := Config{
-		MinDispatchProbability: 0, // Test without leaky bucket effect.
-		CachingTTL:             time.Hour,
-	}
-	d := NewDetector(cfg, logr.Discard())
-	ctx := context.Background()
-
-	validPod := newMockPodMetrics("Valid", 1.0, 0.1, 0.01, 0)
-	nilPodStruct := &mockPodMetrics{Pod: nil} // Invalid: GetPod() returns nil
-	nilEWMAMetrics := newMockPodMetrics("NoEWMA", 0, 0, 0, 0)
-	nilEWMAMetrics.EWMAMetrics = nil // Invalid: GetEWMAMetrics() returns nil
-
-	pods := []backendmetrics.PodMetrics{
-		validPod,
-		nilPodStruct,
-		nilEWMAMetrics,
-	}
-
-	report := d.GetFullnessReport(ctx, pods)
-
-	assert.Len(t, report.PerPodDetails, 1, "Report should only contain details for the valid pod")
-	_, okValid := report.PerPodDetails["default/Valid"]
-	assert.True(t, okValid, "Valid pod details should be present")
-
-	// Verify utilization calculation correctly excludes invalid pods.
-	// ValidPod: μ=10, λ=1. Total μ=10, Total λ=1. ρ = 1/10 = 0.1.
-	assert.InDelta(t, 0.1, report.SubsetUtilization, 1e-5, "Utilization should only factor in valid pods")
-
-	// Verify invalid pods were handled correctly during access.
-	assert.Equal(t, 0, nilPodStruct.EWMAAccessCount,
-		"Nil pod struct should not have metrics accessed (checked in Phase 1)")
-	// The pod with nil EWMA metrics will be accessed once during the refresh phase (Phase 2) before being discarded.
-	assert.Equal(t, 1, nilEWMAMetrics.EWMAAccessCount,
-		"Pod with nil EWMA should be accessed once during refresh attempt")
-
-	d.mu.RLock()
-	_, okNoEWMA := d.cache["default/NoEWMA"]
-	d.mu.RUnlock()
-	assert.False(t, okNoEWMA, "Pod with nil EWMA should not be cached")
+	assert.Greater(t, details3.Utilization, 5.0, "Utilization after refresh should reflect the updated metrics")
 }
 
 // TestDetector_ConcurrentAccess validates thread safety using the race detector.
@@ -848,17 +618,18 @@ func TestDetector_ConcurrentAccess(t *testing.T) {
 	// This test relies on being run with `go test -race`.
 	t.Parallel()
 
+	// Use a real clock (nil) here as we want to test real-world contention.
 	d := NewDetector(Config{
-		TargetUtilization: 0.8,
-		ProportionalGain:  10.0,
-		CachingTTL:        5 * time.Millisecond, // Use a short TTL to force frequent cache updates (WLock contention).
-	}, logr.Discard())
+		TargetUtilization: 0.85,
+		ResumeUtilization: 0.75,
+		CachingTTL:        5 * time.Millisecond, // Short TTL to force frequent cache updates (WLock contention).
+		ProbeInterval:     10 * time.Millisecond, // Frequent probing interval.
+	}, nil, logr.Discard())
 
 	// Create a diverse set of pods to maximize contention on different cache keys.
 	pods := make([]backendmetrics.PodMetrics, 20)
 	for i := range pods {
-		// Use t.Name() to ensure unique keys if tests run in parallel.
-		pods[i] = newMockPodMetrics(t.Name()+strconv.Itoa(i), float64(i%5)+1, 0.1, 0.01, 0)
+		pods[i] = newStandardMockPod(t.Name()+strconv.Itoa(i), float64(i%5)+1, 10)
 	}
 
 	const (
@@ -869,13 +640,12 @@ func TestDetector_ConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 
 	// Hammer the detector concurrently.
-	for i := range numGoroutines {
+	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
 		go func(routineID int) {
 			defer wg.Done()
-			for j := range numIterations {
-				// Alternate between IsSaturated (uses RNG lock and Cache RLock/WLock) and GetFullnessReport (uses Cache
-				// RLock/WLock).
+			for j := 0; j < numIterations; j++ {
+				// Alternate between IsSaturated (uses probeMu and Cache RLock/WLock) and GetFullnessReport.
 				if routineID%2 == 0 {
 					_ = d.IsSaturated(ctx, pods)
 				} else {
@@ -899,21 +669,21 @@ func TestDetector_ConcurrentAccess(t *testing.T) {
 // BenchmarkDetector measures the performance overhead on the hot path.
 func BenchmarkDetector(b *testing.B) {
 	// Create detectors with different caching strategies.
-	detectorNoCache := NewDetector(Config{CachingTTL: 1 * time.Nanosecond}, logr.Discard()) // Effectively disables cache.
-	detectorWithCache := NewDetector(Config{CachingTTL: time.Hour}, logr.Discard())
+	cfgNoCache := Config{CachingTTL: 1 * time.Nanosecond, WarmUpSampleCount: 1}
+	cfgWithCache := Config{CachingTTL: time.Hour, WarmUpSampleCount: 1}
+
+	// Use real clock (nil) for benchmarks.
+	detectorNoCache := NewDetector(cfgNoCache, nil, logr.Discard())
+	detectorWithCache := NewDetector(cfgWithCache, nil, logr.Discard())
 
 	// Create mock pod data.
 	podCounts := []int{1, 10, 100}
 	for _, count := range podCounts {
 		pods := make([]backendmetrics.PodMetrics, count)
-		for i := range count {
-			// Initialize pods with realistic-looking data.
+		for i := 0; i < count; i++ {
 			pods[i] = newMockPodMetrics(
 				"pod-"+strconv.Itoa(i),
-				5.0,  // λ=5
-				0.1,  // E[S]=0.1s
-				0.01, // Var(S)=0.01
-				2,    // Measured Queue
+				mockPodOptions{Lambda: 5.0, MeanSojourn: 0.1, VarSojourn: 0.01, QueueSize: 2, Samples: 10},
 			)
 		}
 
@@ -922,29 +692,30 @@ func BenchmarkDetector(b *testing.B) {
 		// Benchmark: GetFullnessReport (No Cache / Cache Miss)
 		b.Run(fmt.Sprintf("GetFullnessReport/Pods=%d/CacheMiss", count), func(b *testing.B) {
 			b.ResetTimer()
-			for b.Loop() {
-				// By using the NoCache detector, we force a refresh every time.
+			for n := 0; n < b.N; n++ {
+				// By using the NoCache detector, we force a refresh (fetch + calculation) every time.
 				_ = detectorNoCache.GetFullnessReport(ctx, pods)
 			}
 		})
 
 		// Benchmark: GetFullnessReport (Cache Hit)
 		b.Run(fmt.Sprintf("GetFullnessReport/Pods=%d/CacheHit", count), func(b *testing.B) {
-			// Prime the cache once before the benchmark loop,
+			// Prime the cache once before the benchmark loop.
 			_ = detectorWithCache.GetFullnessReport(ctx, pods)
 			b.ResetTimer()
-			for b.Loop() {
+			for n := 0; n < b.N; n++ {
+				// Measures the overhead of the RLock and aggregation logic.
 				_ = detectorWithCache.GetFullnessReport(ctx, pods)
 			}
 		})
 
 		// Benchmark: IsSaturated (Cache Hit)
-		// This includes the overhead of the RNG locking.
 		b.Run(fmt.Sprintf("IsSaturated/Pods=%d/CacheHit", count), func(b *testing.B) {
 			// Prime the cache.
 			_ = detectorWithCache.GetFullnessReport(ctx, pods)
 			b.ResetTimer()
-			for b.Loop() {
+			for n := 0; n < b.N; n++ {
+				// Measures the overhead of GetFullnessReport (Cache Hit) + stabilization/control logic.
 				_ = detectorWithCache.IsSaturated(ctx, pods)
 			}
 		})

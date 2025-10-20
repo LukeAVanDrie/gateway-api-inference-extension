@@ -104,6 +104,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 			Pod: &backend.Pod{
 				Address:        addr,
 				NamespacedName: types.NamespacedName{Name: name, Namespace: "default"},
+				Port:           "8000",
 			},
 			MetricsState: backendmetrics.NewMetricsState(),
 			EWMAMetrics:  backendmetrics.NewEWMAMetrics(),
@@ -212,19 +213,13 @@ func TestDirector_HandleRequest(t *testing.T) {
 			wantReqCtx: &handlers.RequestContext{
 				ObjectiveKey:    objectiveName,
 				TargetModelName: model,
-				TargetPod: &backend.Pod{
-					NamespacedName: types.NamespacedName{Namespace: "default", Name: "pod1"},
-					Address:        "192.168.1.100",
-					Port:           "8000",
-					MetricsHost:    "192.168.1.100:8000",
-				},
-				TargetEndpoint: "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
+				TargetPod:       &schedulingtypes.ScoredPod{Pod: createSchedPod("pod1", "192.168.1.100")},
+				TargetEndpoint:  "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
 			},
 			wantMutatedBodyModel:   model,
 			inferenceObjectiveName: objectiveName,
 			targetModelName:        model,
-		},
-		{
+		}, {
 			name: "successful chat completions request",
 			reqBodyMap: map[string]any{
 				"model": model,
@@ -241,13 +236,8 @@ func TestDirector_HandleRequest(t *testing.T) {
 			},
 			wantReqCtx: &handlers.RequestContext{
 				TargetModelName: model,
-				TargetPod: &backend.Pod{
-					NamespacedName: types.NamespacedName{Namespace: "default", Name: "pod1"},
-					Address:        "192.168.1.100",
-					Port:           "8000",
-					MetricsHost:    "192.168.1.100:8000",
-				},
-				TargetEndpoint: "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
+				TargetPod:       &schedulingtypes.ScoredPod{Pod: createSchedPod("pod1", "192.168.1.100")},
+				TargetEndpoint:  "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
 			},
 			wantMutatedBodyModel: model,
 			targetModelName:      model,
@@ -274,13 +264,8 @@ func TestDirector_HandleRequest(t *testing.T) {
 			wantReqCtx: &handlers.RequestContext{
 				ObjectiveKey:    objectiveName,
 				TargetModelName: model,
-				TargetPod: &backend.Pod{
-					NamespacedName: types.NamespacedName{Namespace: "default", Name: "pod1"},
-					Address:        "192.168.1.100",
-					Port:           "8000",
-					MetricsHost:    "192.168.1.100:8000",
-				},
-				TargetEndpoint: "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
+				TargetPod:       &schedulingtypes.ScoredPod{Pod: createSchedPod("pod1", "192.168.1.100")},
+				TargetEndpoint:  "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
 			},
 			wantMutatedBodyModel:   model,
 			inferenceObjectiveName: objectiveName,
@@ -299,13 +284,8 @@ func TestDirector_HandleRequest(t *testing.T) {
 			wantReqCtx: &handlers.RequestContext{
 				ObjectiveKey:    objectiveNameResolve,
 				TargetModelName: "resolved-target-model-A",
-				TargetPod: &backend.Pod{
-					NamespacedName: types.NamespacedName{Namespace: "default", Name: "pod1"},
-					Address:        "192.168.1.100",
-					Port:           "8000",
-					MetricsHost:    "192.168.1.100:8000",
-				},
-				TargetEndpoint: "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
+				TargetPod:       &schedulingtypes.ScoredPod{Pod: createSchedPod("pod1", "192.168.1.100")},
+				TargetEndpoint:  "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
 			},
 			wantMutatedBodyModel:   "resolved-target-model-A",
 			inferenceObjectiveName: objectiveNameResolve,
@@ -319,13 +299,8 @@ func TestDirector_HandleRequest(t *testing.T) {
 			wantReqCtx: &handlers.RequestContext{
 				ObjectiveKey:    "food-review-1",
 				TargetModelName: "food-review-1",
-				TargetPod: &backend.Pod{
-					NamespacedName: types.NamespacedName{Namespace: "default", Name: "pod1"},
-					Address:        "192.168.1.100",
-					Port:           "8000",
-					MetricsHost:    "192.168.1.100:8000",
-				},
-				TargetEndpoint: "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
+				TargetPod:       &schedulingtypes.ScoredPod{Pod: createSchedPod("pod1", "192.168.1.100")},
+				TargetEndpoint:  "192.168.1.100:8000,192.168.2.100:8000,192.168.4.100:8000",
 			},
 			wantMutatedBodyModel: "food-review-1",
 			reqBodyMap: map[string]any{
@@ -434,8 +409,13 @@ func TestDirector_HandleRequest(t *testing.T) {
 				assert.Equal(t, test.wantReqCtx.ObjectiveKey, returnedReqCtx.ObjectiveKey, "reqCtx.Model mismatch")
 				assert.Equal(t, test.wantReqCtx.TargetModelName, returnedReqCtx.TargetModelName,
 					"reqCtx.ResolvedTargetModel mismatch")
-				assert.Equal(t, test.wantReqCtx.TargetPod, returnedReqCtx.TargetPod, "reqCtx.TargetPod mismatch")
 				assert.Equal(t, test.wantReqCtx.TargetEndpoint, returnedReqCtx.TargetEndpoint, "reqCtx.TargetEndpoint mismatch")
+
+				// Compare TargetPod ignoring EWMAMetrics
+				diff := cmp.Diff(test.wantReqCtx.TargetPod, returnedReqCtx.TargetPod, cmpopts.IgnoreFields(schedulingtypes.PodMetrics{}, "EWMAMetrics"))
+				if diff != "" {
+					t.Errorf("reqCtx.TargetPod mismatch (-want +got):\n%s", diff)
+				}
 			}
 
 			if test.wantMutatedBodyModel != "" {
@@ -628,9 +608,7 @@ func TestDirector_HandleResponseReceived(t *testing.T) {
 		Response: &handlers.Response{ // Simulate some response headers
 			Headers: map[string]string{"X-Test-Response-Header": "TestValue"},
 		},
-
-		TargetPod: &backend.Pod{NamespacedName: types.NamespacedName{Namespace: "namespace1", Name: "test-pod-name"}},
-	}
+		TargetPod: &schedulingtypes.PodMetrics{Pod: &backend.Pod{NamespacedName: types.NamespacedName{Namespace: "namespace1", Name: "test-pod-name"}}}}
 
 	_, err := director.HandleResponseReceived(ctx, reqCtx)
 	if err != nil {
@@ -665,8 +643,7 @@ func TestDirector_HandleResponseStreaming(t *testing.T) {
 		Response: &handlers.Response{
 			Headers: map[string]string{"X-Test-Streaming-Header": "StreamValue"},
 		},
-		TargetPod: &backend.Pod{NamespacedName: types.NamespacedName{Namespace: "namespace1", Name: "test-pod-name"}},
-	}
+		TargetPod: &schedulingtypes.PodMetrics{Pod: &backend.Pod{NamespacedName: types.NamespacedName{Namespace: "namespace1", Name: "test-pod-name"}}}}
 
 	_, err := director.HandleResponseBodyStreaming(ctx, reqCtx)
 	if err != nil {
@@ -701,7 +678,7 @@ func TestDirector_HandleResponseComplete(t *testing.T) {
 		Response: &handlers.Response{
 			Headers: map[string]string{"X-Test-Complete-Header": "CompleteValue"},
 		},
-		TargetPod: &backend.Pod{NamespacedName: types.NamespacedName{Namespace: "namespace1", Name: "test-pod-name"}},
+		TargetPod: &schedulingtypes.PodMetrics{Pod: &backend.Pod{NamespacedName: types.NamespacedName{Namespace: "namespace1", Name: "test-pod-name"}}},
 	}
 
 	_, err := director.HandleResponseBodyComplete(ctx, reqCtx)
@@ -734,13 +711,13 @@ type testResponseReceived struct {
 
 type testResponseStreaming struct {
 	tn                       plugins.TypedName
-	lastRespOnStreaming      *Response
+	lastRespOnStreaming      *rcplugins.Response
 	lastTargetPodOnStreaming string
 }
 
 type testResponseComplete struct {
 	tn                      plugins.TypedName
-	lastRespOnComplete      *Response
+	lastRespOnComplete      *rcplugins.Response
 	lastTargetPodOnComplete string
 }
 
@@ -774,17 +751,17 @@ func (p *testResponseComplete) TypedName() plugins.TypedName {
 	return p.tn
 }
 
-func (p *testResponseReceived) ResponseReceived(_ context.Context, _ *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (p *testResponseReceived) ResponseReceived(_ context.Context, _ *schedulingtypes.LLMRequest, response *rcplugins.Response, targetPod schedulingtypes.Pod) {
 	p.lastRespOnResponse = response
 	p.lastTargetPodOnResponse = targetPod.GetPod().GetNamespacedName().String()
 }
 
-func (p *testResponseStreaming) ResponseStreaming(_ context.Context, _ *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (p *testResponseStreaming) ResponseStreaming(_ context.Context, _ *schedulingtypes.LLMRequest, response *rcplugins.Response, targetPod schedulingtypes.Pod) {
 	p.lastRespOnStreaming = response
-	p.lastTargetPodOnStreaming = targetPod.NamespacedName.String()
+	p.lastTargetPodOnStreaming = targetPod.GetPod().NamespacedName.String()
 }
 
-func (p *testResponseComplete) ResponseComplete(_ context.Context, _ *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (p *testResponseComplete) ResponseComplete(_ context.Context, _ *schedulingtypes.LLMRequest, response *rcplugins.Response, targetPod schedulingtypes.Pod) {
 	p.lastRespOnComplete = response
-	p.lastTargetPodOnComplete = targetPod.NamespacedName.String()
+	p.lastTargetPodOnComplete = targetPod.GetPod().NamespacedName.String()
 }

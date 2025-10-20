@@ -32,8 +32,8 @@ import (
 
 // FakePodMetrics is an implementation of PodMetrics that doesn't run the async refresh loop.
 type FakePodMetrics struct {
-	Pod     *backend.Pod
-	Metrics *MetricsState
+	Pod         *backend.Pod
+	Metrics     *MetricsState
 	EWMAMetrics *EWMAMetrics
 }
 

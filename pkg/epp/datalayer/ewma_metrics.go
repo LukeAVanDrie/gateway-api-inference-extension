@@ -45,6 +45,7 @@ type EWMAMetrics struct {
 	VarianceSojournTimeEWMA float64       // EWMA of the variance of sojourn time (Var[S], in seconds squared)
 	m2SojournTimeEWMA       float64       // Internal state for Welford's method (sum of squares of differences)
 	sojournTimeSamples      int64         // Count of samples contributing to the current EWMA
+	lastSojournUpdate       time.Time     // Timestamp of the last update (response received)
 
 	// --- Arrival Rate Metrics (Time-Aware Decaying EWMA) ---
 	// Calculated using a time-aware decaying EWMA to ensure the rate decays when arrivals stop (preventing lockout).
@@ -86,6 +87,7 @@ func (m *EWMAMetrics) UpdateSojournTimeEWMA(sojournTime time.Duration) (time.Dur
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sojournTimeSamples++
+	m.lastSojournUpdate = time.Now()
 	stSeconds := sojournTime.Seconds()
 
 	if m.sojournTimeSamples == 1 {
@@ -128,6 +130,20 @@ func (m *EWMAMetrics) GetVarianceSojournTimeEWMA() float64 {
 		return 0
 	}
 	return m.VarianceSojournTimeEWMA
+}
+
+// GetSojournTimeSamples returns the number of samples contributing to the sojourn time EWMA.
+func (m *EWMAMetrics) GetSojournTimeSamples() int64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sojournTimeSamples
+}
+
+// GetLastSojournUpdate returns the timestamp of the last sojourn time update.
+func (m *EWMAMetrics) GetLastSojournUpdate() time.Time {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.lastSojournUpdate
 }
 
 // GetArrivalRateEWMA returns the current EWMA of the arrival rate (λ) in requests per second.
