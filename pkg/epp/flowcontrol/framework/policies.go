@@ -16,7 +16,10 @@ limitations under the License.
 
 package framework
 
-import "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+import (
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+)
 
 // PriorityScoreType is a descriptor for the domain of a policy's item comparator.
 type PriorityScoreType string
@@ -123,8 +126,7 @@ type IntraFlowDispatchPolicy interface {
 // Implementations define the fairness or dispatch ordering logic between different flows that share the same priority
 // level.
 type InterFlowDispatchPolicy interface {
-	// Name returns a string identifier for the concrete policy implementation type (e.g., "RoundRobin").
-	Name() string
+	plugins.Plugin
 
 	// SelectQueue inspects the flow queues within the provided `PriorityBandAccessor` and returns the `FlowQueueAccessor`
 	// of the queue chosen for the next dispatch attempt.

@@ -21,39 +21,24 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	frameworkmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/mocks"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
-	typesmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
 )
 
-const (
-	flow1ID         = "flow1"
-	flow2ID         = "flow2"
-	commonScoreType = "enqueue_time_ns_asc"
-)
+// --- Test Doubles (Fakes) for BestHead ---
 
-var (
-	flow1Key = types.FlowKey{ID: flow1ID, Priority: 0}
-	flow2Key = types.FlowKey{ID: flow2ID, Priority: 0}
-)
-
-// enqueueTimeComparatorFunc is a test utility. Lower enqueue time is better.
+// enqueueTimeComparatorFunc is a test utility. An earlier enqueue time is "better".
 func enqueueTimeComparatorFunc(a, b types.QueueItemAccessor) bool {
 	return a.EnqueueTime().Before(b.EnqueueTime())
 }
 
-func newTestComparator() *frameworkmocks.MockItemComparator {
-	return &frameworkmocks.MockItemComparator{
-		ScoreTypeV: commonScoreType,
-		FuncV:      enqueueTimeComparatorFunc,
-	}
-}
-
-func newTestBand(queues ...framework.FlowQueueAccessor) *frameworkmocks.MockPriorityBandAccessor {
+// newTestBand creates a new MockPriorityBandAccessor based with the provided queues.
+func newTestBand(t *testing.T, queues ...framework.FlowQueueAccessor) *frameworkmocks.MockPriorityBandAccessor {
+	t.Helper()
 	flowKeys := make([]types.FlowKey, 0, len(queues))
 	queuesByID := make(map[string]framework.FlowQueueAccessor, len(queues))
 	for _, q := range queues {
@@ -76,135 +61,148 @@ func newTestBand(queues ...framework.FlowQueueAccessor) *frameworkmocks.MockPrio
 	}
 }
 
-func TestBestHead_Name(t *testing.T) {
+// --- Tests ---
+
+func TestBestHead_New(t *testing.T) {
 	t.Parallel()
-	policy := newBestHead()
-	assert.Equal(t, BestHeadPolicyName, policy.Name(), "Name should match the policy's constant")
+	plugin, err := newBestHead(PolicyNameBestHead, nil, nil)
+	require.NoError(t, err, "NewBestHead should not return an error for a valid configuration")
+	require.Equal(t, PolicyNameBestHead, plugin.TypedName().Name, "plugin name should match the policy's constant")
+	require.Equal(t, framework.InterFlowDispatchPolicyType, plugin.TypedName().Type,
+		"plugin type should be InterFlowDispatchPolicy")
 }
 
 func TestBestHead_SelectQueue(t *testing.T) {
 	t.Parallel()
-	policy := newBestHead()
 	now := time.Now()
 
-	itemBetter := typesmocks.NewMockQueueItemAccessor(10, "itemBetter", flow1Key)
-	itemBetter.EnqueueTimeV = now.Add(-10 * time.Second)
-	itemWorse := typesmocks.NewMockQueueItemAccessor(20, "itemWorse", flow2Key)
-	itemWorse.EnqueueTimeV = now.Add(-5 * time.Second)
+	key1 := types.FlowKey{ID: "flow1"}
+	key2 := types.FlowKey{ID: "flow2"}
+	item1 := mocks.NewMockQueueItemAccessor(10, "item1", key1) // Better item
+	item2 := mocks.NewMockQueueItemAccessor(5, "item2", key2)  // Worse item
+	item1.EnqueueTimeV = now.Add(-10 * time.Second)
+	item2.EnqueueTimeV = now.Add(-5 * time.Second)
 
-	queue1 := &frameworkmocks.MockFlowQueueAccessor{
-		LenV:        1,
-		PeekHeadV:   itemBetter,
-		FlowKeyV:    flow1Key,
-		ComparatorV: newTestComparator(),
+	validComparator := &frameworkmocks.MockItemComparator{
+		FuncV:      enqueueTimeComparatorFunc,
+		ScoreTypeV: "enqueue_time",
 	}
-	queue2 := &frameworkmocks.MockFlowQueueAccessor{
-		LenV:        1,
-		PeekHeadV:   itemWorse,
-		FlowKeyV:    flow2Key,
-		ComparatorV: newTestComparator(),
+	incompatibleComparator := &frameworkmocks.MockItemComparator{
+		FuncV:      enqueueTimeComparatorFunc,
+		ScoreTypeV: "incompatible_score_type",
 	}
-	queueEmpty := &frameworkmocks.MockFlowQueueAccessor{
-		LenV:         0,
-		PeekHeadErrV: framework.ErrQueueEmpty,
-		FlowKeyV:     types.FlowKey{ID: "flowEmpty"},
-		ComparatorV:  newTestComparator(),
+	nilFuncComparator := &frameworkmocks.MockItemComparator{
+		FuncV:      nil,
+		ScoreTypeV: "enqueue_time",
+	}
+
+	// --- Mock Queue Definitions ---
+	queue1Good := &frameworkmocks.MockFlowQueueAccessor{
+		FlowKeyV:    key1,
+		ComparatorV: validComparator,
+		LenV:        1,
+		PeekHeadV:   item1,
+	}
+	queue2Good := &frameworkmocks.MockFlowQueueAccessor{
+		FlowKeyV:    key2,
+		ComparatorV: validComparator,
+		LenV:        1,
+		PeekHeadV:   item2,
+	}
+	queue1Empty := &frameworkmocks.MockFlowQueueAccessor{
+		FlowKeyV:    key1,
+		ComparatorV: validComparator,
+		LenV:        0,
 	}
 
 	testCases := []struct {
-		name            string
-		band            framework.PriorityBandAccessor
-		expectedQueueID string
-		expectedErr     error
-		shouldPanic     bool
+		name                 string
+		band                 framework.PriorityBandAccessor
+		expectedSelectionKey *types.FlowKey
+		expectErr            bool
+		errContains          string
 	}{
 		{
-			name:            "BasicSelection_TwoQueues",
-			band:            newTestBand(queue1, queue2),
-			expectedQueueID: flow1ID,
+			name:                 "selects queue with the best head item from two valid queues with best first",
+			band:                 newTestBand(t, queue1Good, queue2Good),
+			expectedSelectionKey: &key1,
 		},
 		{
-			name:            "IgnoresEmptyQueues",
-			band:            newTestBand(queue1, queueEmpty, queue2),
-			expectedQueueID: flow1ID,
+			name:                 "selects queue with the best head item from two valid queues with best last",
+			band:                 newTestBand(t, queue2Good, queue1Good),
+			expectedSelectionKey: &key1,
 		},
 		{
-			name:            "SingleNonEmptyQueue",
-			band:            newTestBand(queue1),
-			expectedQueueID: flow1ID,
+			name:                 "ignores empty queues and selects the only non-empty one",
+			band:                 newTestBand(t, queue1Empty, queue2Good),
+			expectedSelectionKey: &key2,
 		},
 		{
-			name: "ComparatorCompatibility",
-			band: newTestBand(
-				&frameworkmocks.MockFlowQueueAccessor{
-					LenV:        1,
-					PeekHeadV:   itemBetter,
-					FlowKeyV:    flow1Key,
-					ComparatorV: &frameworkmocks.MockItemComparator{ScoreTypeV: "typeA", FuncV: enqueueTimeComparatorFunc},
-				},
-				&frameworkmocks.MockFlowQueueAccessor{
-					LenV:        1,
-					PeekHeadV:   itemWorse,
-					FlowKeyV:    flow2Key,
-					ComparatorV: &frameworkmocks.MockItemComparator{ScoreTypeV: "typeB", FuncV: enqueueTimeComparatorFunc},
-				},
-			),
-			expectedErr: framework.ErrIncompatiblePriorityType,
+			name: "returns nil when all queues are empty",
+			band: newTestBand(t, queue1Empty, &frameworkmocks.MockFlowQueueAccessor{
+				FlowKeyV:    key2,
+				ComparatorV: validComparator,
+				LenV:        0,
+			}),
+			expectedSelectionKey: nil,
 		},
 		{
-			name: "QueuePeekHeadErrors",
-			band: newTestBand(
-				&frameworkmocks.MockFlowQueueAccessor{
-					LenV:         1,
-					PeekHeadErrV: errors.New("peek error"),
-					FlowKeyV:     flow1Key,
-					ComparatorV:  newTestComparator(),
-				},
-				queue2,
-			),
-			expectedQueueID: flow2ID,
+			name:                 "returns nil when the band is nil",
+			band:                 nil,
+			expectedSelectionKey: nil,
 		},
 		{
-			name: "QueueComparatorIsNil",
-			band: newTestBand(
-				&frameworkmocks.MockFlowQueueAccessor{
-					LenV:        1,
-					PeekHeadV:   itemBetter,
-					FlowKeyV:    flow1Key,
-					ComparatorV: nil,
-				},
-				queue2,
-			),
-			shouldPanic: true,
+			name: "returns error for incompatible comparators",
+			band: newTestBand(t, queue1Good, &frameworkmocks.MockFlowQueueAccessor{
+				FlowKeyV:    key2,
+				ComparatorV: incompatibleComparator,
+				LenV:        1,
+				PeekHeadV:   item2,
+			}),
+			expectErr:   true,
+			errContains: framework.ErrIncompatiblePriorityType.Error(),
 		},
 		{
-			name: "ComparatorFuncIsNil",
-			band: newTestBand(
-				&frameworkmocks.MockFlowQueueAccessor{
-					LenV:        1,
-					PeekHeadV:   itemBetter,
-					FlowKeyV:    flow1Key,
-					ComparatorV: &frameworkmocks.MockItemComparator{ScoreTypeV: commonScoreType, FuncV: nil},
-				},
-				queue2,
-			),
-			shouldPanic: true,
+			name: "handles queues with nil items gracefully and selects the valid one",
+			band: newTestBand(t, queue2Good, &frameworkmocks.MockFlowQueueAccessor{
+				FlowKeyV:    key1,
+				ComparatorV: validComparator,
+				LenV:        1,
+				PeekHeadV:   nil,
+			}),
+			expectedSelectionKey: &key2,
 		},
 		{
-			name: "AllQueuesEmpty",
-			band: newTestBand(
-				queueEmpty,
-				&frameworkmocks.MockFlowQueueAccessor{
-					LenV:         0,
-					PeekHeadErrV: framework.ErrQueueEmpty,
-					FlowKeyV:     types.FlowKey{ID: "flowEmpty2"},
-					ComparatorV:  newTestComparator(),
-				},
-			),
+			name: "returns error for nil comparator",
+			band: newTestBand(t, queue2Good, &frameworkmocks.MockFlowQueueAccessor{
+				FlowKeyV:    key1,
+				ComparatorV: nil,
+				LenV:        1,
+				PeekHeadV:   item1,
+			}),
+			expectErr:   true,
+			errContains: "comparator",
 		},
 		{
-			name: "NilBand",
-			band: nil,
+			name: "returns error for nil comparator function",
+			band: newTestBand(t, queue1Good, &frameworkmocks.MockFlowQueueAccessor{
+				FlowKeyV:    key2,
+				ComparatorV: nilFuncComparator,
+				LenV:        1,
+				PeekHeadV:   item2,
+			}),
+			expectErr:   true,
+			errContains: "comparator function",
+		},
+		{
+			name: "skips queue with PeekHead error and selects other",
+			band: newTestBand(t, queue2Good, &frameworkmocks.MockFlowQueueAccessor{
+				FlowKeyV:     key1,
+				ComparatorV:  validComparator,
+				LenV:         1,
+				PeekHeadErrV: errors.New("internal peek error"),
+			}),
+			expectedSelectionKey: &key2,
 		},
 	}
 
@@ -212,24 +210,25 @@ func TestBestHead_SelectQueue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if tc.shouldPanic {
-				assert.Panics(t, func() { _, _ = policy.SelectQueue(tc.band) }, "SelectQueue should panic for this edge case")
-				return
-			}
+			plugin, err := newBestHead(PolicyNameBestHead, nil, nil)
+			require.NoError(t, err, "test setup failed: could not create policy")
+			policy := plugin.(framework.InterFlowDispatchPolicy)
 
 			selected, err := policy.SelectQueue(tc.band)
 
-			if tc.expectedErr != nil {
-				require.Error(t, err, "SelectQueue should return an error")
-				assert.ErrorIs(t, err, tc.expectedErr, "The returned error should match the expected error type")
-				assert.Nil(t, selected, "No queue should be selected when an error occurs")
+			if tc.expectErr {
+				require.Error(t, err, "expected an error from SelectQueue")
+				if tc.errContains != "" {
+					require.ErrorContains(t, err, tc.errContains, "error message did not contain expected text")
+				}
+				require.Nil(t, selected, "no queue should be selected when an error occurs")
 			} else {
-				require.NoError(t, err, "SelectQueue should not return an error for valid inputs")
-				if tc.expectedQueueID == "" {
-					assert.Nil(t, selected, "No queue should be selected")
+				require.NoError(t, err, "expected no error from SelectQueue")
+				if tc.expectedSelectionKey == nil {
+					require.Nil(t, selected, "expected no queue to be selected")
 				} else {
-					require.NotNil(t, selected, "A queue should have been selected")
-					assert.Equal(t, tc.expectedQueueID, selected.FlowKey().ID, "The selected queue should have the expected ID")
+					require.NotNil(t, selected, "expected a queue to be selected")
+					require.Equal(t, *tc.expectedSelectionKey, selected.FlowKey(), "the wrong queue was selected")
 				}
 			}
 		})
