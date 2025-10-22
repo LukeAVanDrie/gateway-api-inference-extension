@@ -257,6 +257,33 @@ var (
 		},
 		[]string{"fairness_id", "priority"},
 	)
+
+	FairnessGiniCoefficient = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Subsystem: InferenceExtension,
+			Name:      "flowcontrol_fairness_gini_coefficient",
+			Help:      metricsutil.HelpMsgWithStability("Distribution of the Gini coefficient for a given fairness metric, measuring inequality of service. 0.0 is perfect equality.", compbasemetrics.ALPHA),
+			Buckets:   []float64{0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5},
+		},
+		[]string{"metric_name", "priority"},
+	)
+
+	FairnessMaxMinRatioCurrent = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "flowcontrol_fairness_max_min_ratio_current",
+			Help: metricsutil.HelpMsgWithStability("The instantaneous ratio of the maximum to minimum (non-zero) service received for a given fairness metric. A high value indicates starvation.", compbasemetrics.ALPHA),
+		},
+		[]string{"metric_name", "priority"},
+	)
+
+	FairnessMaxMinRatio = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "flowcontrol_fairness_max_min_ratio",
+			Help:    metricsutil.HelpMsgWithStability("Distribution of the max/min service ratio for a given fairness metric.", compbasemetrics.ALPHA),
+			Buckets: []float64{1, 1.5, 2, 3, 5, 10, 20, 50},
+		},
+		[]string{"metric_name", "priority"},
+	)
 )
 
 var registerMetrics sync.Once
@@ -284,6 +311,9 @@ func Register(customCollectors ...prometheus.Collector) {
 		metrics.Registry.MustRegister(PrefixCacheHitLength)
 		metrics.Registry.MustRegister(flowControlRequestQueueDuration)
 		metrics.Registry.MustRegister(flowControlQueueSize)
+		metrics.Registry.MustRegister(FairnessGiniCoefficient)
+		metrics.Registry.MustRegister(FairnessMaxMinRatioCurrent)
+		metrics.Registry.MustRegister(FairnessMaxMinRatio)
 		for _, collector := range customCollectors {
 			metrics.Registry.MustRegister(collector)
 		}
@@ -312,6 +342,9 @@ func Reset() {
 	PrefixCacheHitLength.Reset()
 	flowControlRequestQueueDuration.Reset()
 	flowControlQueueSize.Reset()
+	FairnessGiniCoefficient.Reset()
+	FairnessMaxMinRatioCurrent.Reset()
+	FairnessMaxMinRatio.Reset()
 }
 
 // RecordRequstCounter records the number of requests.
@@ -454,4 +487,15 @@ func IncFlowControlQueueSize(fairnessID, priority string) {
 // DecFlowControlQueueSize decrements the Flow Control queue size gauge.
 func DecFlowControlQueueSize(fairnessID, priority string) {
 	flowControlQueueSize.WithLabelValues(fairnessID, priority).Dec()
+}
+
+// RecordFairnessGiniCoefficient records the Gini Coefficient for a given fairness metric.
+func RecordFairnessGiniCoefficient(metricName, priority string, value float64) {
+	FairnessGiniCoefficient.WithLabelValues(metricName, priority).Observe(value)
+}
+
+// RecordFairnessMaxMinRatio records the current and historical Max/Min Ratio for a given fairness metric.
+func RecordFairnessMaxMinRatio(metricName, priority string, value float64) {
+	FairnessMaxMinRatioCurrent.WithLabelValues(metricName, priority).Set(value)
+	FairnessMaxMinRatio.WithLabelValues(metricName, priority).Observe(value)
 }
