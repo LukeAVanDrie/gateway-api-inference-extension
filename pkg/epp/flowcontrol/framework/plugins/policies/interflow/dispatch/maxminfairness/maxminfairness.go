@@ -23,6 +23,8 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/go-logr/logr"
+
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
@@ -57,6 +59,8 @@ type Config struct {
 
 // NewMaxMinFairness is the factory function for the MaxMinFairness policy.
 func NewMaxMinFairness(name string, params json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
+	logger := logr.FromContextOrDiscard(handle.Context()).WithName("maxminfairness-factory")
+	logger.Info("Creating MaxMinFairness policy", "name", name, "params", string(params))
 	if name != PolicyNameMaxMinFairness {
 		return nil, fmt.Errorf("plugin name mismatch: expected %s, got %s", PolicyNameMaxMinFairness, name)
 	}
@@ -73,6 +77,7 @@ func NewMaxMinFairness(name string, params json.RawMessage, handle plugins.Handl
 		return nil, fmt.Errorf("invalid reference to FairnessMetric plugin %q: %w", cfg.MetricName, err)
 	}
 
+	logger.Info("Successfully created MaxMinFairness policy", "name", name)
 	return &MaxMinFairness{
 		typedName: plugins.TypedName{Type: framework.InterFlowDispatchPolicyType, Name: name},
 		metric:    metric,

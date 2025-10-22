@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
@@ -43,6 +44,8 @@ import (
 const (
 	// loggerName is the name to use for loggers created by this package.
 	loggerName = "SaturationDetector"
+	// targetMaxQPS is the desired maximum dispatch rate.
+	targetMaxQPS = 5
 )
 
 // Config holds the configuration for the SaturationDetector.
@@ -63,23 +66,30 @@ type Config struct {
 // Detector determines system saturation based on metrics of the given candidate pods.
 type Detector struct {
 	config *Config
+	pacer  *Pacer
 }
 
 // NewDetector creates a new SaturationDetector.
 // The config provides the thresholds for determining saturation.
 func NewDetector(config *Config, logger logr.Logger) *Detector {
-	logger.WithName(loggerName).V(logutil.DEFAULT).Info("Creating new SaturationDetector",
+	log := logger.WithName(loggerName)
+	log.V(logutil.DEFAULT).Info("Creating new SaturationDetector",
 		"queueDepthThreshold", config.QueueDepthThreshold,
 		"kvCacheUtilThreshold", config.KVCacheUtilThreshold,
-		"metricsStalenessThreshold", config.MetricsStalenessThreshold.String())
+		"metricsStalenessThreshold", config.MetricsStalenessThreshold.String(),
+		"targetMaxQPS", targetMaxQPS)
+
+	pacer := NewPacer(targetMaxQPS, DefaultPacerBurstDuration, clock.RealClock{})
 
 	return &Detector{
 		config: config,
+		pacer:  pacer,
 	}
 }
 
 // IsSaturated checks if the system is currently considered saturated.
-// The system is saturated if NO pod currently has "good capacity".
+// The system is saturated if EITHER the dispatch rate limit is exceeded
+// OR NO pod currently has "good capacity".
 // "Good capacity" means:
 //  1. Metrics are fresh (not stale).
 //  2. WaitingQueueSize <= QueueDepthThreshold.
@@ -88,6 +98,13 @@ func NewDetector(config *Config, logger logr.Logger) *Detector {
 // This function is called with the relevant pods for the current request.
 func (d *Detector) IsSaturated(ctx context.Context, candidatePods []backendmetrics.PodMetrics) bool {
 	logger := log.FromContext(ctx)
+
+	// First, check if the dispatch rate is within the allowed limit.
+	if !d.pacer.Allow(1.0) {
+		logger.V(logutil.DEBUG).Info("Dispatch rate limit exceeded, system is considered SATURATED", "targetMaxQPS", d.pacer.GetRate())
+		return true
+	}
+
 	for _, podMetric := range candidatePods {
 		metrics := podMetric.GetMetrics()
 		podNn := "unknown-pod"
@@ -96,38 +113,38 @@ func (d *Detector) IsSaturated(ctx context.Context, candidatePods []backendmetri
 		}
 
 		if metrics == nil {
-			logger.V(logutil.TRACE).Info("Pod has nil metrics, skipping for saturation check",
+			logger.V(logutil.DEBUG).Info("Pod has nil metrics, skipping for saturation check",
 				"pod", podNn)
 			continue
 		}
 
 		// Check for metric staleness
 		if time.Since(metrics.UpdateTime) > d.config.MetricsStalenessThreshold {
-			logger.V(logutil.TRACE).Info("Pod metrics are stale, considered as not having good capacity",
+			logger.V(logutil.DEBUG).Info("Pod metrics are stale, considered as not having good capacity",
 				"pod", podNn, "updateTime", metrics.UpdateTime, "stalenessThreshold", d.config.MetricsStalenessThreshold)
 			continue
 		}
 
 		// Check queue depth
 		if metrics.WaitingQueueSize > d.config.QueueDepthThreshold {
-			logger.V(logutil.TRACE).Info("Pod WaitingQueueSize is above threshold, considered as not having good capacity",
+			logger.V(logutil.DEBUG).Info("Pod WaitingQueueSize is above threshold, considered as not having good capacity",
 				"pod", podNn, "waitingQueueSize", metrics.WaitingQueueSize, "threshold", d.config.QueueDepthThreshold)
 			continue // WaitingQueueSize is above threshold, considered saturated.
 		}
 
 		// Check KV cache utilization
 		if metrics.KVCacheUsagePercent > d.config.KVCacheUtilThreshold {
-			logger.V(logutil.TRACE).Info("Pod KVCacheUsagePercent is above threshold, considered as not having good capacity",
+			logger.V(logutil.DEBUG).Info("Pod KVCacheUsagePercent is above threshold, considered as not having good capacity",
 				"pod", podNn, "kvCacheUsagePercent", metrics.KVCacheUsagePercent, "threshold", d.config.KVCacheUtilThreshold)
 			continue // KVCacheUsagePercent is above threshold, considered saturated.
 		}
 
-		logger.V(logutil.TRACE).Info("Found pod with good capacity", "pod", podNn, "waitingQueue", metrics.WaitingQueueSize,
+		logger.V(logutil.DEBUG).Info("Found pod with good capacity", "pod", podNn, "waitingQueue", metrics.WaitingQueueSize,
 			"queueThreshold", d.config.QueueDepthThreshold, "kvCacheUtil", metrics.KVCacheUsagePercent, "kvCacheThreshold", d.config.KVCacheUtilThreshold)
 
 		return false // Found at least one pod with good capacity, so system is NOT saturated.
 	}
 
-	logger.V(logutil.VERBOSE).Info("No pods found with good capacity; system is considered SATURATED.")
+	logger.V(logutil.DEBUG).Info("No pods found with good capacity; system is considered SATURATED.")
 	return true
 }

@@ -78,6 +78,8 @@ type TurnsFairnessMetric struct {
 
 // New is the factory function for the TurnsFairnessMetric.
 func New(name string, params json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
+	logger := logr.FromContextOrDiscard(handle.Context()).WithName("turns-factory")
+	logger.Info("Creating TurnsFairnessMetric", "name", name, "params", string(params))
 	cfg := Config{
 		WindowSize:     defaultWindowSize.String(),
 		BucketDuration: defaultBucketDur.String(),
@@ -115,6 +117,7 @@ func New(name string, params json.RawMessage, handle plugins.Handle) (plugins.Pl
 	if clk, ok := handle.(interface{ Clock() clock.Clock }); ok {
 		m.clock = clk.Clock()
 	}
+	logger.Info("Successfully created TurnsFairnessMetric", "name", name)
 	return m, nil
 }
 

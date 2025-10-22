@@ -124,17 +124,22 @@ func newShard(
 		policyName := bandConfig.InterFlowDispatchPolicy
 		factory := bandConfig.interFlowFactory
 
+		shardLogger.Info("Instantiating InterFlowDispatchPolicy", "policyName", policyName, "priority", bandConfig.Priority, "params", string(bandConfig.InterFlowDispatchPolicyParams))
 		// TODO: figure out how to pass configuration here for the MaxMin policy which requires a metric name.
 		pluginInstance, err := factory(policyName, bandConfig.InterFlowDispatchPolicyParams, handle)
 		if err != nil {
+			shardLogger.Error(err, "Failed to create inter-flow policy", "policyName", policyName, "priority", bandConfig.Priority)
 			return nil, fmt.Errorf("failed to create inter-flow policy %q for priority band %d: %w",
 				policyName, bandConfig.Priority, err)
 		}
+		shardLogger.Info("Successfully instantiated plugin", "policyName", policyName, "priority", bandConfig.Priority)
+
 		interPolicy, ok := pluginInstance.(framework.InterFlowDispatchPolicy)
 		if !ok {
+			shardLogger.Error(err, "Plugin is not a valid InterFlowDispatchPolicy", "policyName", policyName, "priority", bandConfig.Priority)
 			return nil, fmt.Errorf("plugin %q is not a valid InterFlowDispatchPolicy", policyName)
 		}
-
+		shardLogger.Info("Successfully type asserted plugin", "policyName", policyName, "priority", bandConfig.Priority)
 		s.priorityBands[bandConfig.Priority] = &priorityBand{
 			config:                  bandConfig,
 			queues:                  make(map[string]*managedQueue),

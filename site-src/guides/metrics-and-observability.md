@@ -61,6 +61,9 @@ These metrics provide insights into the experimental flow control layer within t
 |:---|:---|:---|:---|:---|
 | inference_extension_flow_control_request_queue_duration_seconds | Distribution | Distribution of the total time requests spend in the flow control layer. This is measured from the moment a request enters the `EnqueueAndWait` function until it reaches a final outcome (e.g., Dispatched, Rejected, Evicted). | `fairness_id`=&lt;flow-id&gt; <br> `priority`=&lt;flow-priority&gt; <br> `outcome`=&lt;QueueOutcome&gt; | ALPHA |
 | inference_extension_flow_control_queue_size | Gauge | The current number of requests being actively managed by the flow control layer. This counts requests from the moment they enter the `EnqueueAndWait` function until they reach a final outcome. | `fairness_id`=&lt;flow-id&gt; <br> `priority`=&lt;flow-priority&gt; | ALPHA |
+| inference_extension_flowcontrol_fairness_gini_coefficient | Histogram | Distribution of the Gini coefficient for a given fairness metric, measuring inequality of service. 0.0 is perfect equality. | `metric_name`=&lt;metric-name&gt; <br> `priority`=&lt;flow-priority&gt; | ALPHA |
+| inference_extension_flowcontrol_fairness_max_min_ratio_current | Gauge | The instantaneous ratio of the maximum to minimum (non-zero) service received for a given fairness metric. A high value indicates starvation. | `metric_name`=&lt;metric-name&gt; <br> `priority`=&lt;flow-priority&gt; | ALPHA |
+| inference_extension_flowcontrol_fairness_max_min_ratio | Histogram | Distribution of the max/min service ratio for a given fairness metric. | `metric_name`=&lt;metric-name&gt; <br> `priority`=&lt;flow-priority&gt; | ALPHA |
 
 ## Scrape Metrics & Pprof profiles
 

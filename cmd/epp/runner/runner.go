@@ -164,7 +164,14 @@ func (r *Runner) WithSchedulerConfig(schedulerConfig *scheduling.SchedulerConfig
 	return r
 }
 
-func (r *Runner) Run(ctx context.Context) error {
+func (r *Runner) Run(ctx context.Context) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			setupLog.Error(fmt.Errorf("panic: %v", r), "Caught panic in Runner.Run")
+			panic(r) // Re-panic after logging
+		}
+	}()
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -290,6 +297,13 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	r.registerInTreePlugins()
 	handle := plugins.NewEppHandle(ctx, datastore.PodList)
+
+	// --- Instantiate and Add Flow Control Plugins to Handle ---
+	if err := r.addFlowControlPluginsToHandle(handle); err != nil {
+		setupLog.Error(err, "Failed to setup flow control plugins")
+		return err
+	}
+
 	if err := r.parsePluginsConfiguration(ctx, handle); err != nil {
 		setupLog.Error(err, "Failed to parse plugins configuration")
 		return err
@@ -407,6 +421,33 @@ func (r *Runner) registerInTreePlugins() {
 	plugins.Register(scorer.LoraAffinityScorerType, scorer.LoraAffinityScorerFactory)
 	// register filter for test purpose only (used in conformance tests)
 	plugins.Register(testfilter.HeaderBasedTestingFilterType, testfilter.HeaderBasedTestingFilterFactory)
+}
+
+func (r *Runner) addFlowControlPluginsToHandle(handle plugins.Handle) error {
+	setupLog.Info("Adding Flow Control plugins to handle")
+	// Instantiate TurnsFairnessMetric
+	setupLog.Info("Instantiating turns metric")
+	turnsParams := json.RawMessage(`{}`) // Default params
+	turnsPlugin, err := turns.New(turns.MetricName, turnsParams, handle)
+	if err != nil {
+		return fmt.Errorf("failed to instantiate turns metric: %w", err)
+	}
+	handle.AddPlugin(turns.MetricName, turnsPlugin)
+	setupLog.Info("Added plugin to handle", "name", turns.MetricName)
+
+	// Instantiate MaxMinFairness
+	setupLog.Info("Instantiating maxminfairness policy")
+	mmfParams := json.RawMessage(`{"metricName": "` + turns.MetricName + `"}`)
+	mmfPlugin, err := maxminfairness.NewMaxMinFairness(maxminfairness.PolicyNameMaxMinFairness, mmfParams, handle)
+	if err != nil {
+		return fmt.Errorf("failed to instantiate maxminfairness policy: %w", err)
+	}
+	handle.AddPlugin(maxminfairness.PolicyNameMaxMinFairness, mmfPlugin)
+	setupLog.Info("Added plugin to handle", "name", maxminfairness.PolicyNameMaxMinFairness)
+
+	// Add other FC plugins like BestHead if needed
+	setupLog.Info("Finished adding Flow Control plugins to handle")
+	return nil
 }
 
 func (r *Runner) parsePluginsConfiguration(ctx context.Context, handle plugins.Handle) error {
