@@ -17,18 +17,19 @@ limitations under the License.
 package registry
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
-	inter "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/interflow/dispatch"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/interflow/dispatch/besthead"
 	intra "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/intraflow/dispatch"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/intraflow/dispatch/fcfs"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/queue"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/queue/listqueue"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
 
 // =============================================================================
@@ -42,7 +43,7 @@ const (
 	// defaultIntraFlowDispatchPolicy is the default policy for selecting items within a single flow's queue.
 	defaultIntraFlowDispatchPolicy intra.RegisteredPolicyName = fcfs.FCFSPolicyName
 	// defaultInterFlowDispatchPolicy is the default policy for selecting which flow's queue to service next.
-	defaultInterFlowDispatchPolicy inter.RegisteredPolicyName = besthead.BestHeadPolicyName
+	defaultInterFlowDispatchPolicy string = besthead.PolicyNameBestHead
 	// defaultQueue is the default queue implementation for flows.
 	defaultQueue queue.RegisteredQueueName = listqueue.ListQueueName
 	// defaultInitialShardCount is the default number of parallel shards to create when the registry is initialized.
@@ -81,8 +82,8 @@ type Config struct {
 	// Optional: Defaults to `defaultInitialShardCount` (1).
 	InitialShardCount int
 
-	// FlowGCTimeout defines the interval at which the registry scans for and garbage collects idle flows. A flow is
-	// collected if it has been observed to be Idle for at least one full scan interval.
+	// FlowGCTimeout defines the interval at which the registry scans for and garbage collects idle flows.
+	// A flow is collected if it has been observed to be Idle for at least one full scan interval.
 	// Optional: Defaults to `defaultFlowGCTimeout` (5 minutes).
 	FlowGCTimeout time.Duration
 
@@ -102,7 +103,6 @@ type Config struct {
 
 	// Factory functions used for plugin instantiation during configuration validation.
 	// These enable dependency injection for unit testing the validation logic.
-	interFlowDispatchPolicyFactory interFlowDispatchPolicyFactory
 	intraFlowDispatchPolicyFactory intraFlowDispatchPolicyFactory
 	queueFactory                   queueFactory
 }
@@ -129,7 +129,9 @@ type PriorityBandConfig struct {
 	// InterFlowDispatchPolicy specifies the name of the policy used to select which flow's queue to service next from
 	// this band.
 	// Optional: Defaults to `defaultInterFlowDispatchPolicy` ("BestHead").
-	InterFlowDispatchPolicy inter.RegisteredPolicyName
+	InterFlowDispatchPolicy string
+	// InterFlowDispatchPolicyParams contains the raw JSON configuration for the selected InterFlowDispatchPolicy.
+	InterFlowDispatchPolicyParams json.RawMessage `json:"interFlowDispatchPolicyParams,omitempty"`
 
 	// Queue specifies the default name of the `framework.SafeQueue` implementation for flow queues in this band.
 	// Optional: Defaults to `defaultQueue` ("ListQueue").
@@ -138,6 +140,10 @@ type PriorityBandConfig struct {
 	// MaxBytes defines the maximum total byte size for this priority band, aggregated across all shards.
 	// Optional: Defaults to `defaultPriorityBandMaxBytes` (1 GB).
 	MaxBytes uint64
+
+	// interFlowFactory is the resolved factory function for the InterFlowDispatchPolicy.
+	// Populated during validation.
+	interFlowFactory plugins.FactoryFunc `json:"-"`
 }
 
 // =============================================================================
@@ -168,12 +174,17 @@ type ShardPriorityBandConfig struct {
 	// IntraFlowDispatchPolicy is the name of the policy for dispatch within a flow's queue.
 	IntraFlowDispatchPolicy intra.RegisteredPolicyName
 	// InterFlowDispatchPolicy is the name of the policy for dispatch between flow queues.
-	InterFlowDispatchPolicy inter.RegisteredPolicyName
+	InterFlowDispatchPolicy string
+	// InterFlowDispatchPolicyParams contains the raw JSON configuration for the selected InterFlowDispatchPolicy.
+	InterFlowDispatchPolicyParams json.RawMessage `json:"-"`
 	// Queue is the name of the queue implementation to use.
 	Queue queue.RegisteredQueueName
 	// MaxBytes is this shard's partitioned portion of this band's global capacity limit.
 	// The `controller.FlowController` enforces this limit for this specific shard.
 	MaxBytes uint64
+
+	// interFlowFactory is the resolved factory function for the InterFlowDispatchPolicy.
+	interFlowFactory plugins.FactoryFunc `json:"-"`
 }
 
 // getBandConfig finds and returns the shard-level configuration for a specific priority level.
@@ -209,9 +220,6 @@ func (c *Config) ValidateAndApplyDefaults() (*Config, error) {
 	}
 
 	// Ensure the DI factories are initialized for production use if `NewConfig` was called without options.
-	if cfg.interFlowDispatchPolicyFactory == nil {
-		cfg.interFlowDispatchPolicyFactory = inter.NewPolicyFromName
-	}
 	if cfg.intraFlowDispatchPolicyFactory == nil {
 		cfg.intraFlowDispatchPolicyFactory = intra.NewPolicyFromName
 	}
@@ -255,6 +263,15 @@ func (c *Config) ValidateAndApplyDefaults() (*Config, error) {
 		if band.MaxBytes == 0 {
 			band.MaxBytes = defaultPriorityBandMaxBytes
 		}
+
+		// Validate and store InterFlowDispatchPolicy factory.
+		policyName := band.InterFlowDispatchPolicy
+		factory, ok := plugins.Registry[policyName]
+		if !ok {
+			return nil, fmt.Errorf("config validation failed: InterFlowDispatchPolicy %q not found in plugin registry",
+				policyName)
+		}
+		band.interFlowFactory = factory
 
 		if err := cfg.validateBandCompatibility(*band); err != nil {
 			return nil, err
@@ -320,12 +337,14 @@ func (c *Config) partition(shardIndex, totalShards int) *ShardConfig {
 
 	for i, template := range c.PriorityBands {
 		shardBandCfg := ShardPriorityBandConfig{
-			Priority:                template.Priority,
-			PriorityName:            template.PriorityName,
-			IntraFlowDispatchPolicy: template.IntraFlowDispatchPolicy,
-			InterFlowDispatchPolicy: template.InterFlowDispatchPolicy,
-			Queue:                   template.Queue,
-			MaxBytes:                partitionUint64(template.MaxBytes, shardIndex, totalShards),
+			Priority:                      template.Priority,
+			PriorityName:                  template.PriorityName,
+			IntraFlowDispatchPolicy:       template.IntraFlowDispatchPolicy,
+			InterFlowDispatchPolicy:       template.InterFlowDispatchPolicy,
+			InterFlowDispatchPolicyParams: template.InterFlowDispatchPolicyParams,
+			Queue:                         template.Queue,
+			MaxBytes:                      partitionUint64(template.MaxBytes, shardIndex, totalShards),
+			interFlowFactory:              template.interFlowFactory,
 		}
 		shardCfg.PriorityBands[i] = shardBandCfg
 
@@ -361,12 +380,6 @@ func partitionUint64(total uint64, partitionIndex, totalPartitions int) uint64 {
 // This is used exclusively for dependency injection in tests and should not be used in production code.
 type configOption func(*Config)
 
-// interFlowDispatchPolicyFactory defines the signature for a function that creates an
-// `framework.InterFlowDispatchPolicy` instance from its registered name.
-// It serves as an abstraction over the concrete `inter.NewPolicyFromName` factory, enabling dependency injection for
-// testing validation logic.
-type interFlowDispatchPolicyFactory func(name inter.RegisteredPolicyName) (framework.InterFlowDispatchPolicy, error)
-
 // intraFlowDispatchPolicyFactory defines the signature for a function that creates an
 // `framework.IntraFlowDispatchPolicy` instance from its registered name.
 // It serves as an abstraction over the concrete `intra.NewPolicyFromName` factory, enabling dependency injection for
@@ -381,16 +394,6 @@ type queueFactory func(
 	name queue.RegisteredQueueName,
 	comparator framework.ItemComparator,
 ) (framework.SafeQueue, error)
-
-// withInterFlowDispatchPolicyFactory returns a test-only `configOption` that overrides the factory function for
-// creating `framework.InterFlowDispatchPolicy` instances.
-// This is used exclusively for testing validation logic.
-// test-only
-func withInterFlowDispatchPolicyFactory(factory interFlowDispatchPolicyFactory) configOption {
-	return func(c *Config) {
-		c.interFlowDispatchPolicyFactory = factory
-	}
-}
 
 // withIntraFlowDispatchPolicyFactory returns a test-only `configOption` that overrides the factory function for
 // creating `framework.IntraFlowDispatchPolicy` instances.
@@ -437,18 +440,23 @@ func (c *Config) deepCopy() *Config {
 		FlowGCTimeout:                  c.FlowGCTimeout,
 		EventChannelBufferSize:         c.EventChannelBufferSize,
 		PriorityBands:                  make([]PriorityBandConfig, len(c.PriorityBands)),
-		interFlowDispatchPolicyFactory: c.interFlowDispatchPolicyFactory,
 		intraFlowDispatchPolicyFactory: c.intraFlowDispatchPolicyFactory,
 		queueFactory:                   c.queueFactory,
 	}
 
-	// PriorityBandConfig contains only value types, so a slice copy is sufficient for a deep copy.
-	copy(newCfg.PriorityBands, c.PriorityBands)
+	newCfg.PriorityBands = make([]PriorityBandConfig, len(c.PriorityBands))
+	for i, band := range c.PriorityBands {
+		newCfg.PriorityBands[i] = band
+		if band.InterFlowDispatchPolicyParams != nil {
+			newCfg.PriorityBands[i].InterFlowDispatchPolicyParams = make(json.RawMessage, len(band.InterFlowDispatchPolicyParams))
+			copy(newCfg.PriorityBands[i].InterFlowDispatchPolicyParams, band.InterFlowDispatchPolicyParams)
+		}
+	}
 
 	if c.priorityBandMap != nil {
 		newCfg.priorityBandMap = make(map[int]*PriorityBandConfig, len(c.PriorityBands))
-		// Crucial: We must rebuild the map and take the address of the elements within the new slice (`newCfg.PriorityBands`)
-		// to ensure the map pointers are correct for the newly created `Config` instance.
+		// Crucial: We must rebuild the map and take the address of the elements within the new slice (newCfg.PriorityBands)
+		// to ensure the map pointers are correct for the newly created Config instance.
 		for i := range newCfg.PriorityBands {
 			band := &newCfg.PriorityBands[i]
 			newCfg.priorityBandMap[band.Priority] = band

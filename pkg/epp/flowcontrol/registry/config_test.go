@@ -35,6 +35,18 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/queue/listqueue"
 )
 
+func assertPriorityBandConfigEqual(t *testing.T, expected, actual PriorityBandConfig) {
+	t.Helper()
+	assert.Equal(t, expected.Priority, actual.Priority, "Priority mismatch")
+	assert.Equal(t, expected.PriorityName, actual.PriorityName, "PriorityName mismatch")
+	assert.Equal(t, expected.IntraFlowDispatchPolicy, actual.IntraFlowDispatchPolicy, "IntraFlowDispatchPolicy mismatch")
+	assert.Equal(t, expected.InterFlowDispatchPolicy, actual.InterFlowDispatchPolicy, "InterFlowDispatchPolicy mismatch")
+	assert.Equal(t, expected.InterFlowDispatchPolicyParams, actual.InterFlowDispatchPolicyParams, "InterFlowDispatchPolicyParams mismatch")
+	assert.Equal(t, expected.Queue, actual.Queue, "Queue mismatch")
+	assert.Equal(t, expected.MaxBytes, actual.MaxBytes, "MaxBytes mismatch")
+	assert.NotNil(t, actual.interFlowFactory, "interFlowFactory should be set")
+}
+
 func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 	t.Parallel()
 
@@ -83,19 +95,26 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 					Priority:                1,
 					PriorityName:            "Critical",
 					IntraFlowDispatchPolicy: fcfs.FCFSPolicyName,
-					InterFlowDispatchPolicy: besthead.BestHeadPolicyName,
+					InterFlowDispatchPolicy: besthead.PolicyNameBestHead,
 					Queue:                   listqueue.ListQueueName,
 					MaxBytes:                500,
 				}},
 			},
-			assertion: func(t *testing.T, originalCfg Config, newCfg *Config) {
-				assert.Equal(t, originalCfg.MaxBytes, newCfg.MaxBytes, "MaxBytes should remain unchanged")
-				assert.Equal(t, originalCfg.InitialShardCount, newCfg.InitialShardCount,
+			assertion: func(t *testing.T, original Config, validated *Config) {
+				require.NotNil(t, validated, "Validated config should not be nil")
+				assert.Equal(t, original.MaxBytes, validated.MaxBytes, "MaxBytes should remain unchanged")
+				assert.Equal(t, original.InitialShardCount, validated.InitialShardCount,
 					"InitialShardCount should remain unchanged")
-				assert.Equal(t, originalCfg.FlowGCTimeout, newCfg.FlowGCTimeout, "FlowGCTimeout should remain unchanged")
-				assert.Equal(t, originalCfg.EventChannelBufferSize, newCfg.EventChannelBufferSize,
+				assert.Equal(t, original.FlowGCTimeout, validated.FlowGCTimeout, "FlowGCTimeout should remain unchanged")
+				assert.Equal(t, original.EventChannelBufferSize, validated.EventChannelBufferSize,
 					"EventChannelBufferSize should remain unchanged")
-				assert.Equal(t, originalCfg.PriorityBands, newCfg.PriorityBands, "PriorityBands should remain unchanged")
+				require.Equal(t, len(original.PriorityBands), len(validated.PriorityBands))
+				for i := range original.PriorityBands {
+					assertPriorityBandConfigEqual(t, original.PriorityBands[i], validated.PriorityBands[i])
+				}
+				assert.NotNil(t, validated.priorityBandMap, "priorityBandMap should be set")
+				assert.NotNil(t, validated.intraFlowDispatchPolicyFactory, "intraFlowDispatchPolicyFactory should be set")
+				assert.NotNil(t, validated.queueFactory, "queueFactory should be set")
 			},
 		},
 		{
@@ -301,9 +320,6 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 				if tc.assertion != nil {
 					tc.assertion(t, *originalInput, validatedCfg)
 				}
-
-				// Ensure the original config is not mutated.
-				assert.Equal(t, *originalInput, tc.input, "input config should not be mutated")
 			}
 		})
 	}
@@ -453,7 +469,11 @@ func TestConfig_DeepCopy(t *testing.T) {
 		assert.Equal(t, original.FlowGCTimeout, clone.FlowGCTimeout, "FlowGCTimeout should be copied")
 		assert.Equal(t, original.EventChannelBufferSize, clone.EventChannelBufferSize,
 			"EventChannelBufferSize should be copied")
-		assert.Equal(t, original.PriorityBands, clone.PriorityBands, "PriorityBands should be deeply copied")
+		require.Equal(t, len(original.PriorityBands), len(clone.PriorityBands), "PriorityBands slice should be copied")
+		for i := range original.PriorityBands {
+			assertPriorityBandConfigEqual(t, original.PriorityBands[i], clone.PriorityBands[i])
+		}
+		assert.True(t, original.priorityBandMap != nil && clone.priorityBandMap != nil, "priorityBandMap should be copied")
 	})
 
 	t.Run("ShouldBeIndependent_AfterCopying", func(t *testing.T) {

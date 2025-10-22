@@ -279,7 +279,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		runtime.SetBlockProfileRate(1)
 	}
 
-	err = r.parsePluginsConfiguration(ctx, datastore)
+	r.registerInTreePlugins()
+	handle := plugins.NewEppHandle(ctx, datastore.PodList)
+	err = r.parsePluginsConfiguration(ctx, handle)
 	if err != nil {
 		setupLog.Error(err, "Failed to parse plugins configuration")
 		return err
@@ -309,7 +311,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			return fmt.Errorf("invalid Flow Control config: %w", err)
 		}
 
-		registry, err := fcregistry.NewFlowRegistry(fcCfg.Registry, setupLog)
+		registry, err := fcregistry.NewFlowRegistry(fcCfg.Registry, setupLog, handle)
 		if err != nil {
 			return fmt.Errorf("failed to initialize Flow Registry: %w", err)
 		}
@@ -392,7 +394,7 @@ func (r *Runner) registerInTreePlugins() {
 	plugins.Register(testfilter.HeaderBasedTestingFilterType, testfilter.HeaderBasedTestingFilterFactory)
 }
 
-func (r *Runner) parsePluginsConfiguration(ctx context.Context, ds datastore.Datastore) error {
+func (r *Runner) parsePluginsConfiguration(ctx context.Context, handle plugins.Handle) error {
 	if *configText == "" && *configFile == "" {
 		return nil // configuring through code, not through file
 	}
@@ -410,8 +412,6 @@ func (r *Runner) parsePluginsConfiguration(ctx context.Context, ds datastore.Dat
 		}
 	}
 
-	r.registerInTreePlugins()
-	handle := plugins.NewEppHandle(ctx, ds.PodList)
 	config, err := loader.LoadConfig(configBytes, handle, logger)
 
 	if err != nil {

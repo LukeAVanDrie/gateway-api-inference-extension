@@ -18,6 +18,7 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -31,10 +32,10 @@ import (
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
-	inter "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/interflow/dispatch"
 	intra "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/intraflow/dispatch"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
 
 // --- Test Harness ---
@@ -45,6 +46,7 @@ type registryTestHarness struct {
 	fr        *FlowRegistry
 	config    Config
 	fakeClock *testclock.FakeClock
+	handle    *fakeHandle
 }
 
 // harnessOptions configures the test harness.
@@ -78,7 +80,8 @@ func newRegistryTestHarness(t *testing.T, opts harnessOptions) *registryTestHarn
 
 	fakeClock := testclock.NewFakeClock(time.Now())
 	registryOpts := []RegistryOption{withClock(fakeClock)}
-	fr, err := NewFlowRegistry(*validatedCfg, logr.Discard(), registryOpts...)
+	handle := &fakeHandle{}
+	fr, err := NewFlowRegistry(*validatedCfg, logr.Discard(), handle, registryOpts...)
 	require.NoError(t, err, "Test setup: NewFlowRegistry should not fail")
 
 	// Start the GC loop in the background.
@@ -99,6 +102,7 @@ func newRegistryTestHarness(t *testing.T, opts harnessOptions) *registryTestHarn
 		fr:        fr,
 		config:    *fr.config,
 		fakeClock: fakeClock,
+		handle:    handle,
 	}
 }
 
@@ -135,16 +139,39 @@ func (h *registryTestHarness) openConnectionOnFlow(key types.FlowKey) {
 func TestFlowRegistry_New(t *testing.T) {
 	t.Parallel()
 
-	t.Run("ShouldFail_WhenInitialShardCreationFails", func(t *testing.T) {
+	t.Run("ShouldFail_WhenInterFlowPluginNotFound", func(t *testing.T) {
 		t.Parallel()
-		config, err := newConfig(
-			Config{PriorityBands: []PriorityBandConfig{{Priority: highPriority, PriorityName: "A"}}},
-			withInterFlowDispatchPolicyFactory(func(inter.RegisteredPolicyName) (framework.InterFlowDispatchPolicy, error) {
-				return nil, errors.New("injected factory failure")
-			}),
-		)
-		require.NoError(t, err, "Test setup: creating the config object itself should not fail")
-		_, err = NewFlowRegistry(*config, logr.Discard())
+		config := Config{PriorityBands: []PriorityBandConfig{{
+			Priority:                highPriority,
+			PriorityName:            "A",
+			InterFlowDispatchPolicy: "non-existent-policy",
+		}}}
+
+		_, err := config.ValidateAndApplyDefaults()
+		require.Error(t, err, "ValidateAndApplyDefaults should fail")
+		assert.Contains(t, err.Error(), "non-existent-policy", "Error message should mention the missing policy")
+		assert.Contains(t, err.Error(), "not found in plugin registry", "Error message should indicate registry lookup failure")
+	})
+
+	t.Run("ShouldFail_WhenInitialShardCreationFails_DueToFactoryError", func(t *testing.T) {
+		// This test modifies global state, so don't run in parallel
+		const policyName = "failing-interflow-policy"
+		config := Config{PriorityBands: []PriorityBandConfig{{
+			Priority:                highPriority,
+			PriorityName:            "A",
+			InterFlowDispatchPolicy: policyName,
+		}}}
+
+		// Register a factory that will return an error
+		plugins.Registry[policyName] = func(name string, config json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
+			return nil, errors.New("injected factory failure")
+		}
+		defer delete(plugins.Registry, policyName) // Cleanup
+
+		validatedCfg, err := config.ValidateAndApplyDefaults()
+		require.NoError(t, err, "Validation should pass as factory exists")
+
+		_, err = NewFlowRegistry(*validatedCfg, logr.Discard(), &fakeHandle{})
 		require.Error(t, err, "NewFlowRegistry should fail when initial shard setup fails")
 		assert.Contains(t, err.Error(), "injected factory failure",
 			"Error message should reflect the root cause from the failing plugin factory")

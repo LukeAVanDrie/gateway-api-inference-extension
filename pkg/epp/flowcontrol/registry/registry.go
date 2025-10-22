@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
 
@@ -111,6 +112,7 @@ type FlowRegistry struct {
 	config *Config
 	logger logr.Logger
 	clock  clock.WithTicker
+	handle plugins.Handle
 
 	// --- Lock-free / Concurrent state (hot path) ---
 
@@ -147,11 +149,12 @@ func withClock(clk clock.WithTickerAndDelayedExecution) RegistryOption {
 }
 
 // NewFlowRegistry creates and initializes a new `FlowRegistry` instance.
-func NewFlowRegistry(config Config, logger logr.Logger, opts ...RegistryOption) (*FlowRegistry, error) {
+func NewFlowRegistry(config Config, logger logr.Logger, handle plugins.Handle, opts ...RegistryOption) (*FlowRegistry, error) {
 	cfg := config.deepCopy()
 	fr := &FlowRegistry{
 		config:               cfg,
 		logger:               logger.WithName("flow-registry"),
+		handle:               handle,
 		activeShards:         []*registryShard{},
 		drainingShards:       make(map[string]*registryShard),
 		perPriorityBandStats: make(map[int]*bandStats, len(cfg.PriorityBands)),
@@ -465,7 +468,7 @@ func (fr *FlowRegistry) executeScaleUpLocked(newTotalActive int) error {
 			partitionedConfig,
 			fr.logger,
 			fr.propagateStatsDelta,
-			fr.config.interFlowDispatchPolicyFactory,
+			fr.handle,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to create new shard object %s: %w", shardID, err)

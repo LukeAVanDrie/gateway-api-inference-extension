@@ -17,6 +17,8 @@ limitations under the License.
 package registry
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -28,11 +30,12 @@ import (
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
-	inter "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/interflow/dispatch"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/interflow/dispatch/besthead"
 	intra "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/intraflow/dispatch"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/queue"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
 
 const (
@@ -46,6 +49,13 @@ const (
 
 // --- Test Harness and Mocks ---
 
+// fakeHandle is a minimal implementation of plugins.Handle for testing.
+type fakeHandle struct {
+	plugins.Handle
+}
+
+func (h *fakeHandle) Context() context.Context { return context.Background() }
+
 // shardTestHarness holds all components for a `registryShard` test.
 type shardTestHarness struct {
 	t                *testing.T
@@ -54,6 +64,7 @@ type shardTestHarness struct {
 	highPriorityKey1 types.FlowKey
 	highPriorityKey2 types.FlowKey
 	lowPriorityKey   types.FlowKey
+	handle           *fakeHandle
 }
 
 // newShardTestHarness initializes a `shardTestHarness` with a default configuration.
@@ -69,11 +80,12 @@ func newShardTestHarness(t *testing.T) *shardTestHarness {
 
 	statsPropagator := &mockStatsPropagator{}
 	shardConfig := globalConfig.partition(0, 1)
+	handle := &fakeHandle{}
 	shard, err := newShard(
 		"test-shard-1",
 		shardConfig, logr.Discard(),
 		statsPropagator.propagate,
-		inter.NewPolicyFromName,
+		handle,
 	)
 	require.NoError(t, err, "Test setup: newShard should not return an error with valid configuration")
 
@@ -84,6 +96,7 @@ func newShardTestHarness(t *testing.T) *shardTestHarness {
 		highPriorityKey1: types.FlowKey{ID: "hp-flow-1", Priority: highPriority},
 		highPriorityKey2: types.FlowKey{ID: "hp-flow-2", Priority: highPriority},
 		lowPriorityKey:   types.FlowKey{ID: "lp-flow-1", Priority: lowPriority},
+		handle:           handle,
 	}
 	// Automatically sync some default flows for convenience.
 	h.synchronizeFlow(h.highPriorityKey1)
@@ -140,20 +153,29 @@ func TestShard_New(t *testing.T) {
 		require.True(t, ok, "Priority band %d (High) must be initialized", highPriority)
 		assert.Equal(t, "High", bandHigh.config.PriorityName, "Priority band name must match the configuration")
 		require.NotNil(t, bandHigh.interFlowDispatchPolicy, "Inter-flow policy must be instantiated during construction")
-		assert.Equal(t, string(defaultInterFlowDispatchPolicy), bandHigh.interFlowDispatchPolicy.Name(),
+		assert.Equal(t, besthead.PolicyNameBestHead, bandHigh.interFlowDispatchPolicy.TypedName().Name,
 			"The default inter-flow policy implementation must be used when not overridden")
 	})
 
 	t.Run("ShouldFail_WhenInterFlowPolicyFactoryFails", func(t *testing.T) {
-		t.Parallel()
-		shardConfig, _ := newConfig(Config{PriorityBands: []PriorityBandConfig{
-			{Priority: highPriority, PriorityName: "High"},
-		}})
-		failingFactory := func(inter.RegisteredPolicyName) (framework.InterFlowDispatchPolicy, error) {
-			return nil, errors.New("policy not found")
+		// This test modifies global state, so don't run in parallel
+		const policyName = "failing-interflow-policy"
+		// Register a factory that will return an error.
+		plugins.Registry[policyName] = func(name string, config json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
+			return nil, errors.New("policy creation failure")
 		}
-		_, err := newShard("test-shard-1", shardConfig.partition(0, 1), logr.Discard(), nil, failingFactory)
+		defer delete(plugins.Registry, policyName)
+		config := Config{PriorityBands: []PriorityBandConfig{{
+			Priority:                highPriority,
+			PriorityName:            "High",
+			InterFlowDispatchPolicy: policyName,
+		}}}
+		shardConfig, err := newConfig(config) // NO options
+		require.NoError(t, err, "Test setup: newConfig failed")
+
+		_, err = newShard("test-shard-1", shardConfig.partition(0, 1), logr.Discard(), nil, &fakeHandle{})
 		require.Error(t, err, "newShard must fail if the inter-flow policy cannot be instantiated during initialization")
+		assert.Contains(t, err.Error(), "policy creation failure")
 	})
 }
 
@@ -207,7 +229,7 @@ func TestShard_Accessors(t *testing.T) {
 			policy, err := h.shard.InterFlowDispatchPolicy(highPriority)
 			require.NoError(t, err, "InterFlowDispatchPolicy accessor must succeed for a configured priority band")
 			require.NotNil(t, policy, "Returned policy must not be nil (guaranteed by contract)")
-			assert.Equal(t, string(defaultInterFlowDispatchPolicy), policy.Name(),
+			assert.Equal(t, besthead.PolicyNameBestHead, policy.TypedName().Name,
 				"Must return the default inter-flow policy implementation")
 		})
 	})

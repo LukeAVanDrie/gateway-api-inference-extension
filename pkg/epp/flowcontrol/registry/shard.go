@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
 
@@ -108,7 +109,7 @@ func newShard(
 	config *ShardConfig,
 	logger logr.Logger,
 	onStatsDelta propagateStatsDeltaFunc,
-	interFlowFactory interFlowDispatchPolicyFactory,
+	handle plugins.Handle,
 ) (*registryShard, error) {
 	shardLogger := logger.WithName("registry-shard").WithValues("shardID", id)
 	s := &registryShard{
@@ -120,10 +121,18 @@ func newShard(
 	}
 
 	for _, bandConfig := range config.PriorityBands {
-		interPolicy, err := interFlowFactory(bandConfig.InterFlowDispatchPolicy)
+		policyName := bandConfig.InterFlowDispatchPolicy
+		factory := bandConfig.interFlowFactory
+
+		// TODO: figure out how to pass configuration here for the MaxMin policy which requires a metric name.
+		pluginInstance, err := factory(policyName, bandConfig.InterFlowDispatchPolicyParams, handle)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create inter-flow policy %q for priority band %d: %w",
-				bandConfig.InterFlowDispatchPolicy, bandConfig.Priority, err)
+				policyName, bandConfig.Priority, err)
+		}
+		interPolicy, ok := pluginInstance.(framework.InterFlowDispatchPolicy)
+		if !ok {
+			return nil, fmt.Errorf("plugin %q is not a valid InterFlowDispatchPolicy", policyName)
 		}
 
 		s.priorityBands[bandConfig.Priority] = &priorityBand{
