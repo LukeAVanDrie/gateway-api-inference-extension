@@ -21,6 +21,7 @@ import (
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 )
 
 const nilString = "<nil>"
@@ -29,6 +30,8 @@ const nilString = "<nil>"
 type LLMRequest struct {
 	// RequestId is the Envoy generated Id for the request being processed
 	RequestId string
+	// FlowKey is the logical grouping key for the request.
+	FlowKey types.FlowKey
 	// TargetModel is the final target model after traffic split.
 	TargetModel string
 	// Data contains the request-body fields that we parse out as user input.

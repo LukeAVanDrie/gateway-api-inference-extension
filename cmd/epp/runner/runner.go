@@ -19,6 +19,7 @@ package runner
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -53,6 +54,9 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datastore"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol"
 	fccontroller "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/fairnessmetrics/turns"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/interflow/dispatch/maxminfairness"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/observer"
 	fcregistry "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/registry"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics/collectors"
@@ -86,7 +90,12 @@ var flowControlConfig = flowcontrol.Config{
 		// Define domain of accepted priority levels as this field is required. Use defaults for all optional fields.
 		// TODO: this should not be hardcoded.
 		PriorityBands: []fcregistry.PriorityBandConfig{
-			{Priority: 0, PriorityName: "Default"},
+			{
+				Priority:                      0,
+				PriorityName:                  "Default",
+				InterFlowDispatchPolicy:       maxminfairness.PolicyNameMaxMinFairness,
+				InterFlowDispatchPolicyParams: json.RawMessage(`{"metricName": "` + turns.MetricName + `"}`),
+			},
 		},
 	},
 }
@@ -281,11 +290,17 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	r.registerInTreePlugins()
 	handle := plugins.NewEppHandle(ctx, datastore.PodList)
-	err = r.parsePluginsConfiguration(ctx, handle)
-	if err != nil {
+	if err := r.parsePluginsConfiguration(ctx, handle); err != nil {
 		setupLog.Error(err, "Failed to parse plugins configuration")
 		return err
 	}
+
+	r.requestControlConfig.AddPlugins(handle.GetAllPlugins()...)
+	setupLog.Info("Registered requestcontrol plugins", "config", r.requestControlConfig)
+
+	// --- Start Fairness Observer ---
+	observer.Start(ctx, handle, 0) // Use default scrape interval
+	setupLog.Info("Fairness observer started")
 
 	// --- Initialize Core EPP Components ---
 	if r.schedulerConfig == nil {
@@ -419,9 +434,6 @@ func (r *Runner) parsePluginsConfiguration(ctx context.Context, handle plugins.H
 	}
 
 	r.schedulerConfig = config.SchedulerConfig
-
-	// Add requestControl plugins
-	r.requestControlConfig.AddPlugins(handle.GetAllPlugins()...)
 
 	logger.Info("loaded configuration from file/text successfully")
 	return nil
