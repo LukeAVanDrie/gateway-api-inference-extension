@@ -91,6 +91,9 @@ func (p *MaxMinFairness) TypedName() plugins.TypedName {
 // SelectQueue selects the queue from the flow that has received the least
 // service, as determined by the configured FairnessMetric.
 func (p *MaxMinFairness) SelectQueue(band framework.PriorityBandAccessor) (framework.FlowQueueAccessor, error) {
+	if band == nil {
+		return nil, nil
+	}
 	var activeKeys []types.FlowKey
 	band.IterateQueues(func(queue framework.FlowQueueAccessor) bool {
 		if queue.Len() > 0 {
