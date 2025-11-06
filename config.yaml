@@ -1,0 +1,140 @@
+```yaml
+# config.yaml
+apiVersion: inference.networking.x-k8s.io/v1alpha1
+kind: EndpointPickerConfig
+
+# -----------------------------------------------------------------------------
+# Plugin Definitions
+# -----------------------------------------------------------------------------
+# All reusable components, including Scheduling and Flow Control plugins,
+# are defined in this section. They are instantiated at startup and can
+# be referenced by name in other parts of the configuration.
+# -----------------------------------------------------------------------------
+plugins:
+  # === Scheduling Plugins ===
+  - name: prefix-cache-scorer
+    type: prefix-cache-scorer
+    description: Scores backends based on prefix cache utilization.
+  - name: max-score-picker
+    type: max-score-picker
+    description: Picks the backend with the highest score.
+
+  # === Flow Control Plugins ===
+
+  # --- ItemComparators ---
+  # Define how individual requests are ordered within a queue.
+  - name: enqueue-time-comp
+    type: EnqueueTime
+    description: Orders requests by their enqueue time (FIFO).
+    parameters: {}
+
+  - name: deadline-comp
+    type: Deadline
+    description: Orders requests by a deadline specified in a header.
+    parameters:
+      priorityHeader: "X-Request-Deadline" # Header to extract deadline from
+      defaultDeadline: "5s"             # Optional default if header is missing
+      order: "asc"                      # 'asc' for sooner deadlines first
+
+  # --- SafeQueues ---
+  # Define the concurrent queue implementations.
+  - name: fifo-queue
+    type: ListQueue
+    description: A simple, efficient FIFO queue.
+    parameters: {}
+
+  - name: prio-queue-by-enqueue-time
+    type: MaxMinHeap
+    description: A priority queue ordered by enqueue time.
+    parameters:
+      comparatorRef: "enqueue-time-comp" # References the ItemComparator plugin
+
+  - name: prio-queue-by-deadline
+    type: MaxMinHeap
+    description: A priority queue ordered by request deadline.
+    parameters:
+      comparatorRef: "deadline-comp" # References the ItemComparator plugin
+
+  # --- IntraFlowDispatchPolicies ---
+  # Define how to select the next request from a SINGLE flow's queue.
+  - name: fcfs-policy
+    type: FCFS
+    description: Standard First-Come, First-Served policy.
+    parameters: {} # Implicitly uses EnqueueTime comparator
+
+  - name: deadline-policy
+    type: GenericPriority
+    description: Selects requests based on the 'deadline-comp' comparator.
+    parameters:
+      comparatorRef: "deadline-comp"
+      # This policy requires a queue with CapabilityPriorityConfigurable
+
+  - name: enqueue-time-priority-policy
+    type: GenericPriority
+    description: Selects requests based on the 'enqueue-time-comp' comparator.
+    parameters:
+      comparatorRef: "enqueue-time-comp"
+
+  # --- InterFlowDispatchPolicies ---
+  # Define how to select the next FLOW to service from a Priority Band.
+  - name: round-robin-inter-policy
+    type: RoundRobin
+    description: Services flows in a round-robin fashion.
+    parameters: {}
+
+  - name: best-head-inter-policy
+    type: BestHead
+    description: Services the flow with the highest priority item at the head of its queue.
+    parameters: {}
+
+# -----------------------------------------------------------------------------
+# Scheduling Profiles
+# -----------------------------------------------------------------------------
+schedulingProfiles:
+  - name: default
+    plugins:
+      - pluginRef: prefix-cache-scorer
+        weight: 100
+      - pluginRef: max-score-picker
+
+# -----------------------------------------------------------------------------
+# Flow Control Configuration
+# -----------------------------------------------------------------------------
+# This section configures the Flow Control layer's global behavior and
+# defines the priority bands.
+# -----------------------------------------------------------------------------
+flowControl:
+  controller:
+    defaultRequestTTL: "30s"
+    expiryCleanupInterval: "1s"
+    processorReconciliationInterval: "5s"
+    enqueueChannelBufferSize: 100
+  registry:
+    maxBytes: 2000000000 # Global max bytes (2GB)
+    initialShardCount: 2
+    flowGCTimeout: "10m"
+    eventChannelBufferSize: 8192
+    # priorityBands: Defines the discrete bands. Requests with other priority
+    # values will be mapped to one of these bands (e.g., to the nearest lower or equal priority).
+    priorityBands:
+      - priority: 100
+        priorityName: "Critical"
+        intraFlowDispatchPolicy: "deadline-policy"
+        interFlowDispatchPolicy: "best-head-inter-policy"
+        queue: "prio-queue-by-deadline" # Must support CapabilityPriorityConfigurable
+        maxBytes: 1000000000 # 1GB
+
+      - priority: 0
+        priorityName: "Standard"
+        intraFlowDispatchPolicy: "fcfs-policy"
+        interFlowDispatchPolicy: "round-robin-inter-policy"
+        queue: "fifo-queue"
+        maxBytes: 500000000 # 500MB
+
+      - priority: -10
+        priorityName: "Batch"
+        intraFlowDispatchPolicy: "enqueue-time-priority-policy" # Example: Still FIFO-like but using GenericPriority
+        interFlowDispatchPolicy: "round-robin-inter-policy"
+        queue: "prio-queue-by-enqueue-time"
+        maxBytes: 500000000 # 500MB
+```

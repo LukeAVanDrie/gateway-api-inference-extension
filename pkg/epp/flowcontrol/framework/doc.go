@@ -14,19 +14,27 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package framework defines the core plugin interfaces for extending the `controller.FlowController`.
+// Package framework defines the plugin extension points and contracts for the Flow Control layer.
+// It provides a set of interfaces that allow developers to customize the core logic of request queuing, prioritization,
+// and dispatch.
 //
-// It establishes the contracts that custom logic, such as queueing disciplines and dispatching policies, must adhere
-// to. By building on these interfaces, the Flow Control system can be extended and customized without modifying the
-// core controller logic.
+// # Architecture Overview
 //
-// The primary contracts are:
-//   - `SafeQueue`: An interface for concurrent-safe queue implementations.
-//   - `IntraFlowDispatchPolicy`: An interface for policies that decide which item to select from within a single flow's
-//     queue.
-//   - `ItemComparator`: An interface vended by policies to make their internal item-ordering logic explicit and
-//     available to other components.
+// The framework is built on three core concepts:
 //
-// These components are linked by `QueueCapability`, which allows policies to declare their queue requirements (e.g.,
-// FIFO or priority-based ordering).
+// 1. Policies: These plugins define the "decision-making" logic of the system.
+//   - ItemComparator: The most fundamental building block, defining the relative priority between two requests.
+//   - IntraFlowDispatchPolicy: Decides which request to dispatch next from *within* a single request flow (e.g., FCFS).
+//   - InterFlowDispatchPolicy: Decides which flow to service next from a set of competing flows at the same priority
+//     level, thus defining fairness.
+//
+// 2. State Management (SafeQueue): This plugin interface defines the contract for a concurrent-safe queue that stores
+// requests for a single flow. Implementations can range from simple FIFO queues to complex priority heaps.
+//
+// 3. Accessors: These are read-only interfaces that provide policies with a safe, controlled view into the system's
+// state (e.g., FlowQueueAccessor, PriorityBandAccessor). Policies use these accessors to inspect queues without being
+// able to mutate them directly, enforcing a clean separation of concerns.
+//
+// A developer seeking to customize the Flow Control layer will typically implement one or more of the plugin interfaces
+// defined in this package and register them in the EPP configuration.
 package framework

@@ -20,15 +20,16 @@ package listqueue
 
 import (
 	"container/list"
+	"encoding/json"
 	"sync"
 	"sync/atomic"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/queue"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
 
-// ListQueueName is the name of the list-based queue implementation.
+// ListQueueType is the name of the list-based queue implementation.
 //
 // This queue provides a high-performance, low-overhead implementation based on a standard `container/list`.
 // It advertises the `CapabilityFIFO`.
@@ -50,22 +51,25 @@ import (
 //
 // For workloads that require the strictest possible logical-time ordering this layer can provide, explicitly using a
 // queue that supports `CapabilityPriorityConfigurable` is the appropriate choice.
-const ListQueueName = "ListQueue"
+const ListQueueType = "ListQueue"
 
 func init() {
-	queue.MustRegisterQueue(queue.RegisteredQueueName(ListQueueName),
-		func(_ framework.ItemComparator) (framework.SafeQueue, error) {
-			// The list queue is a simple FIFO queue and does not use a comparator.
-			return newListQueue(), nil
-		})
+	plugins.Register(ListQueueType, ListQueueFactory)
+}
+
+// ListQueueFactory creates a new ListQueue plugin.
+func ListQueueFactory(name string, _ json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
+	return newListQueue(name), nil
 }
 
 // listQueue is the internal implementation of the ListQueue.
-// See the documentation for the exported `ListQueueName` constant for detailed user-facing information.
+// See the documentation for the exported `ListQueueType` constant for detailed user-facing information.
 type listQueue struct {
-	requests *list.List
-	byteSize atomic.Uint64
-	mu       sync.RWMutex
+	plugins.Plugin
+	typedName plugins.TypedName
+	requests  *list.List
+	byteSize  atomic.Uint64
+	mu        sync.RWMutex
 }
 
 // listItemHandle is the concrete type for `types.QueueItemHandle` used by `listQueue`.
@@ -94,13 +98,19 @@ func (lh *listItemHandle) IsInvalidated() bool {
 var _ types.QueueItemHandle = &listItemHandle{}
 
 // newListQueue creates a new `listQueue` instance.
-func newListQueue() *listQueue {
+func newListQueue(name string) *listQueue {
 	return &listQueue{
-		requests: list.New(),
+		typedName: plugins.TypedName{Type: ListQueueType, Name: name},
+		requests:  list.New(),
 	}
 }
 
 // --- `framework.SafeQueue` Interface Implementation ---
+
+// TypedName returns the type and name of the plugin.
+func (lq *listQueue) TypedName() plugins.TypedName {
+	return lq.typedName
+}
 
 // Add enqueues an item to the back of the list.
 func (lq *listQueue) Add(item types.QueueItemAccessor) error {
@@ -184,11 +194,6 @@ func (lq *listQueue) Drain() (removedItems []types.QueueItemAccessor, err error)
 	lq.requests.Init()
 	lq.byteSize.Store(0)
 	return removedItems, nil
-}
-
-// Name returns the name of the queue.
-func (lq *listQueue) Name() string {
-	return ListQueueName
 }
 
 // Capabilities returns the capabilities of the queue.

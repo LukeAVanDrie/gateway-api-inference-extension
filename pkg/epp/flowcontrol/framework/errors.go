@@ -20,33 +20,32 @@ import (
 	"errors"
 )
 
-// `SafeQueue` Errors
-//
-// These errors relate to operations directly on a `SafeQueue` implementation. They are returned by `SafeQueue` methods
-// and might be handled or wrapped by the `contracts.FlowRegistry`'s `contracts.ManagedQueue` or the
-// `controller.FlowController`.
+// --- SafeQueue Errors ---
+// These sentinel errors are returned by SafeQueue plugin implementations.
 var (
-	// ErrNilQueueItem indicates that a nil `types.QueueItemAccessor` was passed to `SafeQueue.Add()`.
+	// ErrNilQueueItem is returned by SafeQueue.Add when the provided item is nil.
 	ErrNilQueueItem = errors.New("queue item cannot be nil")
 
-	// ErrQueueEmpty indicates an attempt to perform an operation on an empty `SafeQueue` that requires one or more items
-	// (e.g., calling `SafeQueue.PeekHead()`).
+	// ErrQueueEmpty is returned by queue operations that require at least one item (e.g., PeekHead) when the queue is
+	// empty.
 	ErrQueueEmpty = errors.New("queue is empty")
 
-	// ErrInvalidQueueItemHandle indicates that a `types.QueueItemHandle` provided to a `SafeQueue` operation (e.g.,
-	// `SafeQueue.Remove()`) is not valid for that queue, has been invalidated, or does not correspond to an actual item
-	// in the queue.
+	// ErrInvalidQueueItemHandle is returned by SafeQueue.Remove when the provided handle is not valid for the queue
+	// This can occur if the handle is nil, was created by a different queue instance, or has already been invalidated by
+	// a prior removal operation.
 	ErrInvalidQueueItemHandle = errors.New("invalid queue item handle")
 
-	// ErrQueueItemNotFound indicates that a `SafeQueue.Remove(handle)` operation did not find an item matching the
-	// provided, valid `types.QueueItemHandle`. This can occur if the item was removed by a concurrent operation.
+	// ErrQueueItemNotFound is returned by SafeQueue.Remove when the provided handle is valid, but the corresponding item
+	// is not found in the queue.
+	// This typically indicates that the item was removed by a concurrent operation after its handle was acquired.
 	ErrQueueItemNotFound = errors.New("queue item not found for the given handle")
 )
 
-// Policy Errors
+// --- Policy Errors ---
+// These sentinel errors are returned by Policy plugin implementations.
 var (
-	// ErrIncompatiblePriorityType indicates that an `InterFlowDispatchPolicy` (like "BestHead") attempted to compare
-	// items from two different flow queues whose `ItemComparator`s have different `ScoreType` values, making a
-	// meaningful comparison impossible.
+	// ErrIncompatiblePriorityType is returned by an InterFlowDispatchPolicy when it attempts to compare items from two
+	// queues whose ItemComparator plugins
+	// have mismatching ScoreType() values. A meaningful comparison is only possible if the scoring domains are identical.
 	ErrIncompatiblePriorityType = errors.New("incompatible priority score type for comparison")
 )
