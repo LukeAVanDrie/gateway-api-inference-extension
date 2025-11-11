@@ -64,7 +64,6 @@ import (
 	fcregistry "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/registry"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics/collectors"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
 	testresponsereceived "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins/test/responsereceived"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector"
@@ -79,6 +78,19 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/env"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 	"sigs.k8s.io/gateway-api-inference-extension/version"
+
+	// --- Scheduling Framework Plugins ---
+	_ "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/picker"
+	_ "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/profile"
+	_ "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/scorer"
+	_ "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/test/filter"
+
+	// --- Flow Control Framework Plugins ---
+	// TODO: Additional plugins like comparators and queues will be added here in subsequent phases.
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/interflow"
+
+	// This triggers the registration of all in-tree plugins via their init() functions.
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
 
 const (
@@ -104,7 +116,11 @@ var flowControlConfig = flowcontrol.Config{
 		// Define domain of accepted priority levels as this field is required. Use defaults for all optional fields.
 		// TODO: this should not be hardcoded.
 		PriorityBands: []fcregistry.PriorityBandConfig{
-			{Priority: 0, PriorityName: "Default"},
+			{
+				Priority:                   0,
+				PriorityName:               "Default",
+				InterFlowDispatchPolicyRef: interflow.BestHeadType,
+			},
 		},
 	},
 }
@@ -338,7 +354,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			return fmt.Errorf("invalid Flow Control config: %w", err)
 		}
 
-		registry, err := fcregistry.NewFlowRegistry(fcCfg.Registry, setupLog)
+		registry, err := fcregistry.NewFlowRegistry(fcCfg.Registry, plugins.NewEPPPluginFactory(handle), setupLog)
 		if err != nil {
 			return fmt.Errorf("failed to initialize Flow Registry: %w", err)
 		}
@@ -456,10 +472,11 @@ func (r *Runner) parseConfigurationPhaseOne(ctx context.Context) (*configapi.End
 
 	logger := log.FromContext(ctx)
 
+	// Read the raw configuration from either a file or a command-line flag.
 	var configBytes []byte
 	if *configText != "" {
 		configBytes = []byte(*configText)
-	} else if *configFile != "" { // if config was specified through a file
+	} else {
 		var err error
 		configBytes, err = os.ReadFile(*configFile)
 		if err != nil {

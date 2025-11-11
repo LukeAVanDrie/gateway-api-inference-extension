@@ -156,7 +156,7 @@ func TestLoadRawConfiguration(t *testing.T) {
 			configBytes, _ = os.ReadFile(test.configFile)
 		}
 
-		got, err := loadRawConfig(configBytes)
+		got, err := LoadRawConfig(configBytes)
 		checker(t, "loadRawConfig", test, got, err)
 	}
 }
@@ -329,15 +329,13 @@ func TestLoadRawConfigurationWithDefaults(t *testing.T) {
 			configBytes, _ = os.ReadFile(test.configFile)
 		}
 
-		got, err := loadRawConfig(configBytes)
+		got, err := LoadRawConfig(configBytes)
 		if err == nil {
 			setDefaultsPhaseOne(got)
-
 			err = instantiatePlugins(got.Plugins, handle)
 			if err == nil {
 				setDefaultsPhaseTwo(got, handle)
-
-				err = validateSchedulingProfiles(got)
+				err = validateSchedulingProfiles(got.SchedulingProfiles, handle)
 			}
 		}
 		checker(t, "tested function", test, got, err)
@@ -376,6 +374,7 @@ func TestInstantiatePlugins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadConfigPhaseTwo returned unexpected error - %v", err)
 	}
+
 	if len(handle.GetAllPlugins()) == 0 {
 		t.Fatalf("unexpected empty set of loaded plugins")
 	}
@@ -688,25 +687,6 @@ schedulingProfiles:
 - name: default
   plugins:
   - pluginRef: plover
-`
-
-// invalid parameters (string provided where int is expected)
-//
-//nolint:dupword
-const errorBadPluginReferenceParametersText = `
-apiVersion: inference.networking.x-k8s.io/v1alpha1
-kind: EndpointPickerConfig
-plugins:
-- name: test1
-  type: test-one
-  parameters:
-    threshold: asdf
-- name: profileHandler
-  type: test-profile-handler
-schedulingProfiles:
-- name: default
-  plugins:
-  - pluginRef: test1
 `
 
 // duplicate names in plugin list

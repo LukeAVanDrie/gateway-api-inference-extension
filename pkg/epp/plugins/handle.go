@@ -21,12 +21,16 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/types"
+	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 )
 
 // Handle provides plugins a set of standard data and tools to work with
 type Handle interface {
 	// Context returns a context the plugins can use, if they need one
 	Context() context.Context
+
+	// PluginSpec returns the raw configuration blueprint for the named plugin.
+	PluginSpec(name string) *configapi.PluginSpec
 
 	HandlePlugins
 
@@ -54,7 +58,8 @@ type PodListFunc func() []types.NamespacedName
 
 // eppHandle is an implementation of the interface plugins.Handle
 type eppHandle struct {
-	ctx context.Context
+	ctx         context.Context
+	pluginSpecs map[string]*configapi.PluginSpec
 	HandlePlugins
 	podList PodListFunc
 }
@@ -93,14 +98,29 @@ func (h *eppHandlePlugins) GetAllPluginsWithNames() map[string]Plugin {
 	return h.plugins
 }
 
+// PluginSpec returns the raw configuration blueprint for the named plugin.
+func (h *eppHandle) PluginSpec(name string) *configapi.PluginSpec {
+	return h.pluginSpecs[name]
+}
+
+// PluginSpec returns the raw configuration blueprint for the named plugin.
+func (h *eppHandle) PluginSpec(name string) *configapi.PluginSpec {
+	return h.pluginSpecs[name]
+}
+
 // PodList lists pods.
 func (h *eppHandle) PodList() []types.NamespacedName {
 	return h.podList()
 }
 
-func NewEppHandle(ctx context.Context, podList PodListFunc) Handle {
+func NewEppHandle(ctx context.Context, specs []configapi.PluginSpec, podList PodListFunc) Handle {
+	pluginSpecs := make(map[string]*configapi.PluginSpec, len(specs))
+	for _, spec := range specs {
+		pluginSpecs[spec.Name] = &spec
+	}
 	return &eppHandle{
-		ctx: ctx,
+		ctx:         ctx,
+		pluginSpecs: pluginSpecs,
 		HandlePlugins: &eppHandlePlugins{
 			plugins: map[string]Plugin{},
 		},

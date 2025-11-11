@@ -14,12 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package loader is responsible for parsing the user-provided EPP configuration and building a fully-wired, validated,
+// and ready-to-use runtime configuration.
+//
+// This package acts as the central "linker" for the EPP's pluggable architecture, transforming the declarative,
+// user-facing API representation of the configuration (configapi.EndpointPickerConfig) into the live, operational
+// config.Config object used by the EPP runner.
 package loader
 
 import (
 	"errors"
 	"fmt"
 
+	"github.com/docker/docker/daemon/logger"
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -96,13 +103,25 @@ func loadRawConfig(configBytes []byte) (*configapi.EndpointPickerConfig, error) 
 	codecs := serializer.NewCodecFactory(scheme, serializer.EnableStrict)
 	err := runtime.DecodeInto(codecs.UniversalDecoder(), configBytes, rawConfig)
 	if err != nil {
-		return nil, fmt.Errorf("the configuration is invalid - %w", err)
+		return nil, fmt.Errorf("failed to build scheduler config: %w", err)
 	}
-	return rawConfig, nil
+
+	// factory := plugins.NewPluginFactory(handle)
+	// TODO: Load and validate Flow Control config. TBD if factory is part of config or is a constructor dependency for
+	// the Flow Registry.
+
+	logger.Info("Runtime configuration built successfully.")
+	return finalConfig, nil
 }
 
+// loadSchedulerConfig constructs the runtime SchedulerConfig.
+// It must be called after all singleton plugins have been instantiated.
 func loadSchedulerConfig(configProfiles []configapi.SchedulingProfile, handle plugins.Handle) (*scheduling.SchedulerConfig, error) {
-	profiles := map[string]*framework.SchedulerProfile{}
+	if err := validateSchedulingProfiles(configProfiles, handle); err != nil {
+		return nil, err
+	}
+
+	profiles := make(map[string]*framework.SchedulerProfile, len(configProfiles))
 	for _, namedProfile := range configProfiles {
 		profile := framework.NewSchedulerProfile()
 		for _, plugin := range namedProfile.Plugins {
@@ -111,7 +130,7 @@ func loadSchedulerConfig(configProfiles []configapi.SchedulingProfile, handle pl
 				referencedPlugin = framework.NewWeightedScorer(scorer, *plugin.Weight)
 			}
 			if err := profile.AddPlugins(referencedPlugin); err != nil {
-				return nil, fmt.Errorf("failed to load scheduler config - %w", err)
+				return nil, fmt.Errorf("failed to add plugin %q to profile %q: %w", plugin.PluginRef, namedProfile.Name, err)
 			}
 		}
 		profiles[namedProfile.Name] = profile
@@ -171,31 +190,31 @@ func loadSaturationDetectorConfig(sd *configapi.SaturationDetector) *saturationd
 }
 
 func instantiatePlugins(configuredPlugins []configapi.PluginSpec, handle plugins.Handle) error {
-	pluginNames := sets.New[string]() // set of plugin names, a name must be unique
-
+	pluginNames := sets.New[string]()
 	for _, pluginConfig := range configuredPlugins {
-		if pluginConfig.Type == "" {
-			return fmt.Errorf("plugin definition for '%s' is missing a type", pluginConfig.Name)
+		if pluginConfig.Name == "" {
+			return fmt.Errorf("plugin definition with type %q is missing a name", pluginConfig.Type)
 		}
-
 		if pluginNames.Has(pluginConfig.Name) {
-			return fmt.Errorf("plugin name '%s' used more than once", pluginConfig.Name)
+			return fmt.Errorf("plugin name %q is defined more than once", pluginConfig.Name)
 		}
 		pluginNames.Insert(pluginConfig.Name)
 
-		factory, ok := plugins.Registry[pluginConfig.Type]
+		reg, ok := plugins.Registry[pluginConfig.Type]
 		if !ok {
-			return fmt.Errorf("plugin type '%s' is not found in registry", pluginConfig.Type)
+			return fmt.Errorf("plugin type %q is not found in registry for plugin %q", pluginConfig.Type, pluginConfig.Name)
 		}
 
-		plugin, err := factory(pluginConfig.Name, pluginConfig.Parameters, handle)
+		if reg.Lifecycle == plugins.LifecycleTransient {
+			continue // Skip instantiation for plugins declared as transient blueprints.
+		}
+
+		plugin, err := reg.Factory(pluginConfig.Name, pluginConfig.Parameters, handle)
 		if err != nil {
-			return fmt.Errorf("failed to instantiate the plugin type '%s' - %w", pluginConfig.Type, err)
+			return fmt.Errorf("failed to instantiate singleton plugin %q: %w", pluginConfig.Name, err)
 		}
-
 		handle.AddPlugin(pluginConfig.Name, plugin)
 	}
-
 	return nil
 }
 

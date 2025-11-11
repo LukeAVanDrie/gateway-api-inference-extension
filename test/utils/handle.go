@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/types"
+	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
@@ -38,6 +39,12 @@ func (h *testHandle) Context() context.Context {
 func (h *testHandle) PodList() []types.NamespacedName {
 	return []types.NamespacedName{}
 }
+
+func (h *testHandle) PluginSpec(name string) *configapi.PluginSpec {
+	return &configapi.PluginSpec{Type: name}
+}
+
+// testHandlePlugins is an implmentation of plugins.HandlePlugins for test purposes
 
 type testHandlePlugins struct {
 	plugins map[string]plugins.Plugin
