@@ -35,16 +35,19 @@ import (
 	intra "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/intraflow/dispatch"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+	testutils "sigs.k8s.io/gateway-api-inference-extension/test/utils"
 )
 
 // --- Test Harness ---
 
 // registryTestHarness provides a fully initialized test harness for the `FlowRegistry`.
 type registryTestHarness struct {
-	t         *testing.T
-	fr        *FlowRegistry
-	config    Config
-	fakeClock *testclock.FakeClock
+	t             *testing.T
+	fr            *FlowRegistry
+	config        Config
+	fakeClock     *testclock.FakeClock
+	pluginFactory plugins.PluginFactory
 }
 
 // harnessOptions configures the test harness.
@@ -64,8 +67,8 @@ func newRegistryTestHarness(t *testing.T, opts harnessOptions) *registryTestHarn
 		config = Config{
 			FlowGCTimeout: 5 * time.Minute, // Use a realistic but controllable GC time.
 			PriorityBands: []PriorityBandConfig{
-				{Priority: highPriority, PriorityName: "High"},
-				{Priority: lowPriority, PriorityName: "Low"},
+				{Priority: highPriority, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
+				{Priority: lowPriority, PriorityName: "Low", InterFlowDispatchPolicyRef: interflow.BestHeadType},
 			},
 		}
 	}
@@ -78,7 +81,10 @@ func newRegistryTestHarness(t *testing.T, opts harnessOptions) *registryTestHarn
 
 	fakeClock := testclock.NewFakeClock(time.Now())
 	registryOpts := []RegistryOption{withClock(fakeClock)}
-	fr, err := NewFlowRegistry(*validatedCfg, logr.Discard(), registryOpts...)
+	handle := testutils.NewTestHandle(context.Background())
+	pluginFactory := plugins.NewEPPPluginFactory(handle)
+
+	fr, err := NewFlowRegistry(*validatedCfg, pluginFactory, logr.Discard(), registryOpts...)
 	require.NoError(t, err, "Test setup: NewFlowRegistry should not fail")
 
 	// Start the GC loop in the background.
@@ -95,10 +101,11 @@ func newRegistryTestHarness(t *testing.T, opts harnessOptions) *registryTestHarn
 	})
 
 	return &registryTestHarness{
-		t:         t,
-		fr:        fr,
-		config:    *fr.config,
-		fakeClock: fakeClock,
+		t:             t,
+		fr:            fr,
+		config:        *fr.config,
+		fakeClock:     fakeClock,
+		pluginFactory: pluginFactory,
 	}
 }
 
@@ -128,27 +135,6 @@ func (h *registryTestHarness) openConnectionOnFlow(key types.FlowKey) {
 	err := h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error { return nil })
 	require.NoError(h.t, err, "Registering flow %s should not fail", key)
 	h.assertFlowExists(key, "Flow %s should exist after registration", key)
-}
-
-// --- Constructor and Lifecycle Tests ---
-
-func TestFlowRegistry_New(t *testing.T) {
-	t.Parallel()
-
-	t.Run("ShouldFail_WhenInitialShardCreationFails", func(t *testing.T) {
-		t.Parallel()
-		config, err := newConfig(
-			Config{PriorityBands: []PriorityBandConfig{{Priority: highPriority, PriorityName: "A"}}},
-			withInterFlowDispatchPolicyFactory(func(interflow.RegisteredPolicyName) (framework.InterFlowDispatchPolicy, error) {
-				return nil, errors.New("injected factory failure")
-			}),
-		)
-		require.NoError(t, err, "Test setup: creating the config object itself should not fail")
-		_, err = NewFlowRegistry(*config, logr.Discard())
-		require.Error(t, err, "NewFlowRegistry should fail when initial shard setup fails")
-		assert.Contains(t, err.Error(), "injected factory failure",
-			"Error message should reflect the root cause from the failing plugin factory")
-	})
 }
 
 // --- `FlowRegistryClient` API Tests ---
@@ -521,7 +507,7 @@ func TestFlowRegistry_UpdateShardCount(t *testing.T) {
 			config := Config{
 				MaxBytes: globalCapacity,
 				PriorityBands: []PriorityBandConfig{
-					{Priority: highPriority, PriorityName: "A", MaxBytes: bandCapacity},
+					{Priority: highPriority, PriorityName: "A", MaxBytes: bandCapacity, InterFlowDispatchPolicyRef: interflow.BestHeadType},
 				},
 				InitialShardCount: tc.initialShardCount,
 			}

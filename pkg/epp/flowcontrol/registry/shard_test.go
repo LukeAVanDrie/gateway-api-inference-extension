@@ -17,7 +17,7 @@ limitations under the License.
 package registry
 
 import (
-	"errors"
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -33,6 +33,8 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/queue"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+	testutils "sigs.k8s.io/gateway-api-inference-extension/test/utils"
 )
 
 const (
@@ -51,6 +53,7 @@ type shardTestHarness struct {
 	t                *testing.T
 	shard            *registryShard
 	statsPropagator  *mockStatsPropagator
+	pluginFactory    plugins.PluginFactory
 	highPriorityKey1 types.FlowKey
 	highPriorityKey2 types.FlowKey
 	lowPriorityKey   types.FlowKey
@@ -61,26 +64,37 @@ func newShardTestHarness(t *testing.T) *shardTestHarness {
 	t.Helper()
 	globalConfig, err := newConfig(Config{
 		PriorityBands: []PriorityBandConfig{
-			{Priority: highPriority, PriorityName: "High"},
-			{Priority: lowPriority, PriorityName: "Low"},
+			{Priority: highPriority, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
+			{Priority: lowPriority, PriorityName: "Low", InterFlowDispatchPolicyRef: interflow.BestHeadType},
 		},
 	})
 	require.NoError(t, err, "Test setup: validating and defaulting config should not fail")
 
 	statsPropagator := &mockStatsPropagator{}
 	shardConfig := globalConfig.partition(0, 1)
-	shard, err := newShard(
+
+	handle := testutils.NewTestHandle(context.Background())
+	pluginFactory := plugins.NewEPPPluginFactory(handle)
+
+	interFlowPolicies := make(map[int]framework.InterFlowDispatchPolicy)
+	for _, bandCfg := range globalConfig.PriorityBands {
+		policy, err := plugins.NewPluginByType[framework.InterFlowDispatchPolicy](pluginFactory, bandCfg.InterFlowDispatchPolicyRef)
+		require.NoError(t, err, "Test setup: failed to create InterFlowDispatchPolicy %q", bandCfg.InterFlowDispatchPolicyRef)
+		interFlowPolicies[bandCfg.Priority] = policy
+	}
+
+	shard := newShard(
 		"test-shard-1",
 		shardConfig, logr.Discard(),
 		statsPropagator.propagate,
-		interflow.NewPolicyFromName,
+		interFlowPolicies,
 	)
-	require.NoError(t, err, "Test setup: newShard should not return an error with valid configuration")
 
 	h := &shardTestHarness{
 		t:                t,
 		shard:            shard,
 		statsPropagator:  statsPropagator,
+		pluginFactory:    pluginFactory,
 		highPriorityKey1: types.FlowKey{ID: "hp-flow-1", Priority: highPriority},
 		highPriorityKey2: types.FlowKey{ID: "hp-flow-2", Priority: highPriority},
 		lowPriorityKey:   types.FlowKey{ID: "lp-flow-1", Priority: lowPriority},
@@ -127,34 +141,19 @@ func (h *shardTestHarness) removeItem(key types.FlowKey, item types.QueueItemAcc
 func TestShard_New(t *testing.T) {
 	t.Parallel()
 
-	t.Run("ShouldInitializeCorrectly_WithDefaultConfig", func(t *testing.T) {
-		t.Parallel()
-		h := newShardTestHarness(t)
+	h := newShardTestHarness(t)
 
-		assert.Equal(t, "test-shard-1", h.shard.ID(), "Shard ID must match the value provided during construction")
-		assert.True(t, h.shard.IsActive(), "A newly created shard must be initialized in the Active state")
-		assert.Equal(t, []int{highPriority, lowPriority}, h.shard.AllOrderedPriorityLevels(),
-			"Shard must report configured priority levels sorted numerically (highest priority first)")
+	assert.Equal(t, "test-shard-1", h.shard.ID(), "Shard ID must match the value provided during construction")
+	assert.True(t, h.shard.IsActive(), "A newly created shard must be initialized in the Active state")
+	assert.Equal(t, []int{highPriority, lowPriority}, h.shard.AllOrderedPriorityLevels(),
+		"Shard must report configured priority levels sorted numerically (highest priority first)")
 
-		bandHigh, ok := h.shard.priorityBands[highPriority]
-		require.True(t, ok, "Priority band %d (High) must be initialized", highPriority)
-		assert.Equal(t, "High", bandHigh.config.PriorityName, "Priority band name must match the configuration")
-		require.NotNil(t, bandHigh.interFlowDispatchPolicy, "Inter-flow policy must be instantiated during construction")
-		assert.Equal(t, string(defaultInterFlowDispatchPolicy), bandHigh.interFlowDispatchPolicy.Name(),
-			"The default inter-flow policy implementation must be used when not overridden")
-	})
-
-	t.Run("ShouldFail_WhenInterFlowPolicyFactoryFails", func(t *testing.T) {
-		t.Parallel()
-		shardConfig, _ := newConfig(Config{PriorityBands: []PriorityBandConfig{
-			{Priority: highPriority, PriorityName: "High"},
-		}})
-		failingFactory := func(interflow.RegisteredPolicyName) (framework.InterFlowDispatchPolicy, error) {
-			return nil, errors.New("policy not found")
-		}
-		_, err := newShard("test-shard-1", shardConfig.partition(0, 1), logr.Discard(), nil, failingFactory)
-		require.Error(t, err, "newShard must fail if the inter-flow policy cannot be instantiated during initialization")
-	})
+	bandHigh, ok := h.shard.priorityBands[highPriority]
+	require.True(t, ok, "Priority band %d (High) must be initialized", highPriority)
+	assert.Equal(t, "High", bandHigh.config.PriorityName, "Priority band name must match the configuration")
+	require.NotNil(t, bandHigh.interFlowDispatchPolicy, "Inter-flow policy must be instantiated during construction")
+	assert.Equal(t, interflow.BestHeadType, bandHigh.interFlowDispatchPolicy.TypedName().Type,
+		"The default inter-flow policy implementation must be used when not overridden")
 }
 
 func TestShard_Stats(t *testing.T) {
@@ -207,7 +206,7 @@ func TestShard_Accessors(t *testing.T) {
 			policy, err := h.shard.InterFlowDispatchPolicy(highPriority)
 			require.NoError(t, err, "InterFlowDispatchPolicy accessor must succeed for a configured priority band")
 			require.NotNil(t, policy, "Returned policy must not be nil (guaranteed by contract)")
-			assert.Equal(t, string(defaultInterFlowDispatchPolicy), policy.Name(),
+			assert.Equal(t, interflow.BestHeadType, policy.TypedName().Type,
 				"Must return the default inter-flow policy implementation")
 		})
 	})

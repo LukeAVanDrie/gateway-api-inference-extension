@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
 
@@ -108,9 +109,10 @@ type flowState struct {
 //  3. `flowState.gcLock` (Per-flow GC lock)
 type FlowRegistry struct {
 	// --- Immutable dependencies (set at construction) ---
-	config *Config
-	logger logr.Logger
-	clock  clock.WithTicker
+	config        *Config
+	pluginFactory plugins.PluginFactory
+	logger        logr.Logger
+	clock         clock.WithTicker
 
 	// --- Lock-free / Concurrent state (hot path) ---
 
@@ -147,10 +149,16 @@ func withClock(clk clock.WithTickerAndDelayedExecution) RegistryOption {
 }
 
 // NewFlowRegistry creates and initializes a new `FlowRegistry` instance.
-func NewFlowRegistry(config Config, logger logr.Logger, opts ...RegistryOption) (*FlowRegistry, error) {
+func NewFlowRegistry(
+	config Config,
+	pluginFactory plugins.PluginFactory,
+	logger logr.Logger,
+	opts ...RegistryOption,
+) (*FlowRegistry, error) {
 	cfg := config.deepCopy()
 	fr := &FlowRegistry{
 		config:               cfg,
+		pluginFactory:        pluginFactory,
 		logger:               logger.WithName("flow-registry"),
 		activeShards:         []*registryShard{},
 		drainingShards:       make(map[string]*registryShard),
@@ -460,17 +468,27 @@ func (fr *FlowRegistry) executeScaleUpLocked(newTotalActive int) error {
 		// Using a padding of 4 allows for up to 9999 shards, which is a very safe upper bound.
 		shardID := fmt.Sprintf("shard-%04d", fr.nextShardID+uint64(i))
 		partitionedConfig := fr.config.partition(currentActive+i, newTotalActive)
-		shard, err := newShard(
+
+		// Create all per-band policies for this new shard.
+		interFlowPolicies := make(map[int]framework.InterFlowDispatchPolicy)
+		for _, bandCfg := range fr.config.PriorityBands {
+			policy, err := plugins.NewPluginByType[framework.InterFlowDispatchPolicy](
+				fr.pluginFactory, bandCfg.InterFlowDispatchPolicyRef)
+			if err != nil {
+				return fmt.Errorf(
+					"failed to create InterFlowDispatchPolicy %q for new shard: %w",
+					bandCfg.InterFlowDispatchPolicyRef, err)
+			}
+			interFlowPolicies[bandCfg.Priority] = policy
+		}
+
+		newShards[i] = newShard(
 			shardID,
 			partitionedConfig,
 			fr.logger,
 			fr.propagateStatsDelta,
-			fr.config.interFlowDispatchPolicyFactory,
+			interFlowPolicies,
 		)
-		if err != nil {
-			return fmt.Errorf("failed to create new shard object %s: %w", shardID, err)
-		}
-		newShards[i] = shard
 	}
 
 	// Prepare All Components for All New Shards (Fallible):

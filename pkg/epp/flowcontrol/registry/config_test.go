@@ -17,6 +17,7 @@ limitations under the License.
 package registry
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -32,10 +33,17 @@ import (
 	intra "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/intraflow/dispatch"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/policies/intraflow/dispatch/fcfs"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/queue"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
 
 func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
-	t.Parallel()
+	// Register mock plugins for validation tests.
+	plugins.RegisterWithMetadata("mock-interflow", plugins.PluginRegistration{
+		Lifecycle: plugins.LifecycleTransient,
+		Factory: func(name string, parameters json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
+			return &mocks.MockInterFlowDispatchPolicy{}, nil
+		},
+	})
 
 	testCases := []struct {
 		name          string
@@ -50,8 +58,8 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldApplyDefaults_WhenFieldsAreUnspecified",
 			input: Config{
 				PriorityBands: []PriorityBandConfig{
-					{Priority: 1, PriorityName: "High"},
-					{Priority: 2, PriorityName: "Low", MaxBytes: 500},
+					{Priority: 1, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
+					{Priority: 2, PriorityName: "Low", MaxBytes: 500, InterFlowDispatchPolicyRef: interflow.BestHeadType},
 				},
 			},
 			assertion: func(t *testing.T, _ Config, newCfg *Config) {
@@ -63,8 +71,8 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 				band1 := newCfg.PriorityBands[0]
 				assert.Equal(t, defaultIntraFlowDispatchPolicy, band1.IntraFlowDispatchPolicy,
 					"Band 1 IntraFlowDispatchPolicy should be defaulted")
-				assert.Equal(t, defaultInterFlowDispatchPolicy, band1.InterFlowDispatchPolicy,
-					"Band 1 InterFlowDispatchPolicy should be defaulted")
+				assert.Equal(t, interflow.BestHeadType, band1.InterFlowDispatchPolicyRef,
+					"Band 1 InterFlowDispatchPolicyRef should be set")
 				assert.Equal(t, defaultQueue, band1.Queue, "Band 1 Queue should be defaulted")
 				assert.Equal(t, defaultPriorityBandMaxBytes, band1.MaxBytes, "Band 1 MaxBytes should be defaulted")
 				band2 := newCfg.PriorityBands[1]
@@ -79,12 +87,12 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 				FlowGCTimeout:          10 * time.Minute,
 				EventChannelBufferSize: 5000,
 				PriorityBands: []PriorityBandConfig{{
-					Priority:                1,
-					PriorityName:            "Critical",
-					IntraFlowDispatchPolicy: fcfs.FCFSPolicyName,
-					InterFlowDispatchPolicy: interflow.BestHeadPolicyName,
-					Queue:                   queue.ListQueueName,
-					MaxBytes:                500,
+					Priority:                   1,
+					PriorityName:               "Critical",
+					IntraFlowDispatchPolicy:    fcfs.FCFSPolicyName,
+					InterFlowDispatchPolicyRef: interflow.BestHeadType,
+					Queue:                      queue.ListQueueName,
+					MaxBytes:                   500,
 				}},
 			},
 			assertion: func(t *testing.T, originalCfg Config, newCfg *Config) {
@@ -101,9 +109,10 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldSucceed_WhenPolicyHasNoRequirements",
 			input: Config{
 				PriorityBands: []PriorityBandConfig{{
-					Priority:                1,
-					PriorityName:            "High",
-					IntraFlowDispatchPolicy: intra.RegisteredPolicyName("policy-without-req"),
+					Priority:                   1,
+					PriorityName:               "High",
+					IntraFlowDispatchPolicy:    intra.RegisteredPolicyName("policy-without-req"),
+					InterFlowDispatchPolicyRef: interflow.BestHeadType,
 				}},
 			},
 			opts: []configOption{
@@ -121,10 +130,11 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldSucceed_WhenPolicyAndQueueAreCompatible",
 			input: Config{
 				PriorityBands: []PriorityBandConfig{{
-					Priority:                1,
-					PriorityName:            "High",
-					IntraFlowDispatchPolicy: intra.RegisteredPolicyName("policy-with-reqs"),
-					Queue:                   queue.RegisteredQueueName("queue-with-reqs-capability"),
+					Priority:                   1,
+					PriorityName:               "High",
+					IntraFlowDispatchPolicy:    intra.RegisteredPolicyName("policy-with-reqs"),
+					Queue:                      queue.RegisteredQueueName("queue-with-reqs-capability"),
+					InterFlowDispatchPolicyRef: interflow.BestHeadType,
 				}},
 			},
 			opts: []configOption{
@@ -147,7 +157,7 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 		{
 			name: "ShouldReturnDeepCopy_AndNotMutateInput",
 			input: Config{
-				PriorityBands: []PriorityBandConfig{{Priority: 1, PriorityName: "High"}},
+				PriorityBands: []PriorityBandConfig{{Priority: 1, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType}},
 			},
 			assertion: func(t *testing.T, originalCfg Config, newCfg *Config) {
 				newCfg.PriorityBands[0].PriorityName = "changed"
@@ -163,15 +173,15 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 		},
 		{
 			name:      "ShouldError_WhenPriorityNameIsMissing",
-			input:     Config{PriorityBands: []PriorityBandConfig{{Priority: 1}}},
+			input:     Config{PriorityBands: []PriorityBandConfig{{Priority: 1, InterFlowDispatchPolicyRef: interflow.BestHeadType}}},
 			expectErr: true,
 		},
 		{
 			name: "ShouldError_WhenPriorityLevelsAreDuplicated",
 			input: Config{
 				PriorityBands: []PriorityBandConfig{
-					{Priority: 1, PriorityName: "High"},
-					{Priority: 1, PriorityName: "Also High"},
+					{Priority: 1, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
+					{Priority: 1, PriorityName: "Also High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
 				},
 			},
 			expectErr: true,
@@ -180,21 +190,47 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldError_WhenPriorityNamesAreDuplicated",
 			input: Config{
 				PriorityBands: []PriorityBandConfig{
-					{Priority: 1, PriorityName: "High"},
-					{Priority: 2, PriorityName: "High"},
+					{Priority: 1, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
+					{Priority: 2, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
 				},
 			},
 			expectErr: true,
 		},
 		// --- Plugin and Compatibility Errors ---
 		{
-			name: "ShouldError_WhenPolicyAndQueueAreIncompatible",
+			name: "ShouldError_WhenInterFlowDispatchPolicyRefIsMissing",
 			input: Config{
 				PriorityBands: []PriorityBandConfig{{
 					Priority:                1,
 					PriorityName:            "High",
-					IntraFlowDispatchPolicy: intra.RegisteredPolicyName("policy-with-req"),
+					IntraFlowDispatchPolicy: fcfs.FCFSPolicyName,
 					Queue:                   queue.ListQueueName,
+				}},
+			},
+			expectErr: true,
+		},
+		{
+			name: "ShouldError_WhenInterFlowDispatchPolicyRefIsInvalid",
+			input: Config{
+				PriorityBands: []PriorityBandConfig{{
+					Priority:                   1,
+					PriorityName:               "High",
+					IntraFlowDispatchPolicy:    fcfs.FCFSPolicyName,
+					Queue:                      queue.ListQueueName,
+					InterFlowDispatchPolicyRef: "non-existent-plugin",
+				}},
+			},
+			expectErr: true,
+		},
+		{
+			name: "ShouldError_WhenPolicyAndQueueAreIncompatible",
+			input: Config{
+				PriorityBands: []PriorityBandConfig{{
+					Priority:                   1,
+					PriorityName:               "High",
+					IntraFlowDispatchPolicy:    intra.RegisteredPolicyName("policy-with-req"),
+					Queue:                      queue.ListQueueName,
+					InterFlowDispatchPolicyRef: interflow.BestHeadType,
 				}},
 			},
 			opts: []configOption{withIntraFlowDispatchPolicyFactory(
@@ -210,10 +246,11 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldError_WhenQueueFactoryFails",
 			input: Config{
 				PriorityBands: []PriorityBandConfig{{
-					Priority:                1,
-					PriorityName:            "High",
-					Queue:                   queue.RegisteredQueueName("failing-queue"),
-					IntraFlowDispatchPolicy: intra.RegisteredPolicyName("policy-with-req"),
+					Priority:                   1,
+					PriorityName:               "High",
+					Queue:                      queue.RegisteredQueueName("failing-queue"),
+					IntraFlowDispatchPolicy:    intra.RegisteredPolicyName("policy-with-req"),
+					InterFlowDispatchPolicyRef: interflow.BestHeadType,
 				}},
 			},
 			expectErr: true,
@@ -235,9 +272,10 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldError_WhenPolicyFactoryFails",
 			input: Config{
 				PriorityBands: []PriorityBandConfig{{
-					Priority:                1,
-					PriorityName:            "High",
-					IntraFlowDispatchPolicy: intra.RegisteredPolicyName("failing-policy"),
+					Priority:                   1,
+					PriorityName:               "High",
+					IntraFlowDispatchPolicy:    intra.RegisteredPolicyName("failing-policy"),
+					InterFlowDispatchPolicyRef: interflow.BestHeadType,
 				}},
 			},
 			opts: []configOption{withIntraFlowDispatchPolicyFactory(
@@ -251,7 +289,7 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldApplyDefault_WhenInitialShardCountIsInvalid",
 			input: Config{
 				InitialShardCount: -1,
-				PriorityBands:     []PriorityBandConfig{{Priority: 1, PriorityName: "High"}},
+				PriorityBands:     []PriorityBandConfig{{Priority: 1, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType}},
 			},
 			assertion: func(t *testing.T, _ Config, newCfg *Config) {
 				assert.Equal(t, defaultInitialShardCount, newCfg.InitialShardCount,
@@ -262,7 +300,7 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldApplyDefault_WhenFlowGCTimeoutIsInvalid",
 			input: Config{
 				FlowGCTimeout: 0,
-				PriorityBands: []PriorityBandConfig{{Priority: 1, PriorityName: "High"}},
+				PriorityBands: []PriorityBandConfig{{Priority: 1, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType}},
 			},
 			assertion: func(t *testing.T, _ Config, newCfg *Config) {
 				assert.Equal(t, defaultFlowGCTimeout, newCfg.FlowGCTimeout,
@@ -273,7 +311,7 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 			name: "ShouldApplyDefault_WhenEventChannelBufferSizeIsInvalid",
 			input: Config{
 				EventChannelBufferSize: -1,
-				PriorityBands:          []PriorityBandConfig{{Priority: 1, PriorityName: "High"}},
+				PriorityBands:          []PriorityBandConfig{{Priority: 1, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType}},
 			},
 			assertion: func(t *testing.T, _ Config, newCfg *Config) {
 				assert.Equal(t, defaultEventChannelBufferSize, newCfg.EventChannelBufferSize,
@@ -313,9 +351,9 @@ func TestConfig_Partition(t *testing.T) {
 	baseCfg, err := newConfig(Config{
 		MaxBytes: 103, // Will not distribute evenly
 		PriorityBands: []PriorityBandConfig{
-			{Priority: 1, PriorityName: "High", MaxBytes: 55}, // Will not distribute evenly
-			{Priority: 2, PriorityName: "Low", MaxBytes: 0},   // Will be defaulted to 1,000,000,000
-			{Priority: 3, PriorityName: "Mid", MaxBytes: 20},  // Will distribute evenly
+			{Priority: 1, PriorityName: "High", MaxBytes: 55, InterFlowDispatchPolicyRef: interflow.BestHeadType},
+			{Priority: 2, PriorityName: "Low", MaxBytes: 0, InterFlowDispatchPolicyRef: interflow.BestHeadType},  // Will be defaulted to 1,000,000,000
+			{Priority: 3, PriorityName: "Mid", MaxBytes: 20, InterFlowDispatchPolicyRef: interflow.BestHeadType}, // Will distribute evenly
 		},
 	})
 	require.NoError(t, err, "Test setup: creating the base config should not fail")
@@ -396,7 +434,7 @@ func TestConfig_GetBandConfig(t *testing.T) {
 	t.Parallel()
 	cfg, err := newConfig(Config{
 		PriorityBands: []PriorityBandConfig{
-			{Priority: 10, PriorityName: "High"},
+			{Priority: 10, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
 		},
 	})
 	require.NoError(t, err, "Test setup: creating the config should not fail")
@@ -425,8 +463,8 @@ func TestConfig_DeepCopy(t *testing.T) {
 		FlowGCTimeout:          10 * time.Minute,
 		EventChannelBufferSize: 2048,
 		PriorityBands: []PriorityBandConfig{
-			{Priority: 1, PriorityName: "A"},
-			{Priority: 2, PriorityName: "B"},
+			{Priority: 1, PriorityName: "A", InterFlowDispatchPolicyRef: interflow.BestHeadType},
+			{Priority: 2, PriorityName: "B", InterFlowDispatchPolicyRef: interflow.BestHeadType},
 		},
 	}
 	// Create a fully initialized "original" config to be the source of the copy.
@@ -486,8 +524,8 @@ func TestShardConfig_GetBandConfig(t *testing.T) {
 	t.Parallel()
 	baseCfg, err := newConfig(Config{
 		PriorityBands: []PriorityBandConfig{
-			{Priority: 10, PriorityName: "High"},
-			{Priority: 20, PriorityName: "Low"},
+			{Priority: 10, PriorityName: "High", InterFlowDispatchPolicyRef: interflow.BestHeadType},
+			{Priority: 20, PriorityName: "Low", InterFlowDispatchPolicyRef: interflow.BestHeadType},
 		},
 	})
 	require.NoError(t, err, "Test setup: creating the base config should not fail")

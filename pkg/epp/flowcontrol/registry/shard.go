@@ -108,8 +108,8 @@ func newShard(
 	config *ShardConfig,
 	logger logr.Logger,
 	onStatsDelta propagateStatsDeltaFunc,
-	interFlowFactory interFlowDispatchPolicyFactory,
-) (*registryShard, error) {
+	interFlowPolicies map[int]framework.InterFlowDispatchPolicy,
+) *registryShard {
 	shardLogger := logger.WithName("registry-shard").WithValues("shardID", id)
 	s := &registryShard{
 		id:            id,
@@ -120,16 +120,10 @@ func newShard(
 	}
 
 	for _, bandConfig := range config.PriorityBands {
-		interPolicy, err := interFlowFactory(bandConfig.InterFlowDispatchPolicy)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create inter-flow policy %q for priority band %d: %w",
-				bandConfig.InterFlowDispatchPolicy, bandConfig.Priority, err)
-		}
-
 		s.priorityBands[bandConfig.Priority] = &priorityBand{
 			config:                  bandConfig,
 			queues:                  make(map[string]*managedQueue),
-			interFlowDispatchPolicy: interPolicy,
+			interFlowDispatchPolicy: interFlowPolicies[bandConfig.Priority],
 		}
 		s.orderedPriorityLevels = append(s.orderedPriorityLevels, bandConfig.Priority)
 	}
@@ -138,7 +132,7 @@ func newShard(
 	})
 	s.logger.V(logging.DEFAULT).Info("Registry shard initialized successfully",
 		"priorityBandCount", len(s.priorityBands), "orderedPriorities", s.orderedPriorityLevels)
-	return s, nil
+	return s
 }
 
 // ID returns the unique identifier for this shard.
