@@ -335,7 +335,7 @@ func (sp *ShardProcessor) selectItem(band framework.PriorityBandAccessor) (types
 	}
 	queue, err := interP.SelectQueue(band)
 	if err != nil {
-		return nil, fmt.Errorf("InterFlowDispatchPolicy %q failed to select queue: %w", interP.Name(), err)
+		return nil, fmt.Errorf("InterFlowDispatchPolicy %q failed to select queue: %w", interP.TypedName(), err)
 	}
 	if queue == nil {
 		return nil, nil

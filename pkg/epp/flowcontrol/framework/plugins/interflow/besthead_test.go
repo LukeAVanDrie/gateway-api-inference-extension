@@ -47,33 +47,12 @@ func newTestComparator() *frameworkmocks.MockItemComparator {
 	}
 }
 
-func newTestBand(queues ...framework.FlowQueueAccessor) *frameworkmocks.MockPriorityBandAccessor {
-	flowKeys := make([]types.FlowKey, 0, len(queues))
-	queuesByID := make(map[string]framework.FlowQueueAccessor, len(queues))
-	for _, q := range queues {
-		key := q.FlowKey()
-		flowKeys = append(flowKeys, key)
-		queuesByID[key.ID] = q
-	}
-	return &frameworkmocks.MockPriorityBandAccessor{
-		FlowKeysFunc: func() []types.FlowKey { return flowKeys },
-		QueueFunc: func(id string) framework.FlowQueueAccessor {
-			return queuesByID[id]
-		},
-		IterateQueuesFunc: func(iterator func(queue framework.FlowQueueAccessor) bool) {
-			for _, key := range flowKeys {
-				if !iterator(queuesByID[key.ID]) {
-					break
-				}
-			}
-		},
-	}
-}
-
-func TestBestHead_Name(t *testing.T) {
+func TestBestHead_TypedName(t *testing.T) {
 	t.Parallel()
-	policy := newBestHead()
-	assert.Equal(t, BestHeadPolicyName, policy.Name(), "Name should match the policy's constant")
+	const expectedName = "my-inter-flow-plugin"
+	policy := newBestHead().withName(expectedName)
+	assert.Equal(t, BestHeadType, policy.TypedName().Type, "Type should match the policy's constant")
+	assert.Equal(t, expectedName, policy.TypedName().Name, "Name should match the provided value")
 }
 
 func TestBestHead_SelectQueue(t *testing.T) {
@@ -114,22 +93,22 @@ func TestBestHead_SelectQueue(t *testing.T) {
 	}{
 		{
 			name:            "BasicSelection_TwoQueues",
-			band:            newTestBand(queue1, queue2),
+			band:            newTestBand(t, queue1, queue2),
 			expectedQueueID: flow1ID,
 		},
 		{
 			name:            "IgnoresEmptyQueues",
-			band:            newTestBand(queue1, queueEmpty, queue2),
+			band:            newTestBand(t, queue1, queueEmpty, queue2),
 			expectedQueueID: flow1ID,
 		},
 		{
 			name:            "SingleNonEmptyQueue",
-			band:            newTestBand(queue1),
+			band:            newTestBand(t, queue1),
 			expectedQueueID: flow1ID,
 		},
 		{
 			name: "ComparatorCompatibility",
-			band: newTestBand(
+			band: newTestBand(t,
 				&frameworkmocks.MockFlowQueueAccessor{
 					LenV:        1,
 					PeekHeadV:   itemBetter,
@@ -146,8 +125,24 @@ func TestBestHead_SelectQueue(t *testing.T) {
 			expectedErr: framework.ErrIncompatiblePriorityType,
 		},
 		{
+<<<<<<< HEAD
+=======
+			name: "QueuePeekHeadErrors",
+			band: newTestBand(t,
+				&frameworkmocks.MockFlowQueueAccessor{
+					LenV:         1,
+					PeekHeadErrV: errors.New("peek error"),
+					FlowKeyV:     flow1Key,
+					ComparatorV:  newTestComparator(),
+				},
+				queue2,
+			),
+			expectedQueueID: flow2ID,
+		},
+		{
+>>>>>>> c7f7795 (feat: Adapt InterFlowDispatchPolicy to be a plugin)
 			name: "QueueComparatorIsNil",
-			band: newTestBand(
+			band: newTestBand(t,
 				&frameworkmocks.MockFlowQueueAccessor{
 					LenV:        1,
 					PeekHeadV:   itemBetter,
@@ -160,20 +155,20 @@ func TestBestHead_SelectQueue(t *testing.T) {
 		},
 		{
 			name: "ComparatorFuncIsNil",
-			band: newTestBand(
+			band: newTestBand(t,
+				queue2,
 				&frameworkmocks.MockFlowQueueAccessor{
 					LenV:        1,
 					PeekHeadV:   itemBetter,
 					FlowKeyV:    flow1Key,
 					ComparatorV: &frameworkmocks.MockItemComparator{ScoreTypeV: commonScoreType, FuncV: nil},
 				},
-				queue2,
 			),
 			shouldPanic: true,
 		},
 		{
 			name: "AllQueuesEmpty",
-			band: newTestBand(
+			band: newTestBand(t,
 				queueEmpty,
 				&frameworkmocks.MockFlowQueueAccessor{
 					LenV:        0,

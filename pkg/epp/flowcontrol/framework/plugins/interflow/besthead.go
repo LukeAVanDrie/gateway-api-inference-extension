@@ -14,45 +14,63 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package besthead provides a `framework.InterFlowDispatchPolicy` that selects the queue containing the single "best"
-// item from across all queues in a priority band.
 package interflow
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
 
-// BestHeadPolicyName is the name of the Best Head policy implementation.
-const BestHeadPolicyName = "BestHead"
+const BestHeadType = "best-head"
+
+var _ framework.InterFlowDispatchPolicy = &bestHead{}
 
 func init() {
-	MustRegisterPolicy(RegisteredPolicyName(BestHeadPolicyName),
-		func() (framework.InterFlowDispatchPolicy, error) {
-			return newBestHead(), nil
-		})
+	plugins.RegisterWithMetadata(BestHeadType, plugins.PluginRegistration{
+		Factory:   BestHeadFactory,
+		Lifecycle: plugins.LifecycleTransient,
+	})
 }
 
-type bestHead struct{}
+// BestHeadFactory defines the factory function for BestHead.
+func BestHeadFactory(name string, _ json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
+	return newBestHead().withName(name), nil
+}
+
+// bestHead is an InterFlowDispatchPolicy that implements a greedy, non-fair strategy.
+// It effectively "disables" inter-flow fairness by always selecting the queue that contains the single "best" item from
+// across all queues in the priority band.
+//
+// This policy is useful for maximizing utilization when fairness is not a concern.
+type bestHead struct {
+	typedName plugins.TypedName
+}
 
 func newBestHead() *bestHead {
-	return &bestHead{}
+	return &bestHead{
+		typedName: plugins.TypedName{Type: BestHeadType, Name: BestHeadType},
+	}
 }
 
-// Name returns the name of the policy.
-func (p *bestHead) Name() string {
-	return BestHeadPolicyName
+func (p *bestHead) withName(name string) *bestHead {
+	p.typedName.Name = name
+	return p
 }
 
-// SelectQueue implements a greedy strategy that bypasses fairness concerns to select the queue containing the single
-// "best" item from across all queues in the priority band. It iterates through all non-empty queues, peeks at their
-// head items, and uses the `framework.ItemComparator` from each queue to find the highest-priority item overall.
+// TypedName returns the type and name of the plugin instance.
+func (p *bestHead) TypedName() plugins.TypedName {
+	return p.typedName
+}
+
+// SelectQueue iterates through all non-empty queues in the band, peeks at their head items, and uses each queue's
+// ItemComparator to find the single highest-priority item overall.
 //
-// This policy is useful for maximizing utilization when fairness between flows is not a concern. It requires that all
-// queues being compared have a compatible `framework.ScoreType` to ensure the comparison is meaningful. If an
-// incompatible comparator is found, the selection fails with an error.
+// It requires that all queues being compared have a compatible ScoreType to ensure the comparison is meaningful.
+// If an incompatible comparator is found, the selection fails with an error.
 func (p *bestHead) SelectQueue(band framework.PriorityBandAccessor) (framework.FlowQueueAccessor, error) {
 	if band == nil {
 		return nil, nil
@@ -60,15 +78,19 @@ func (p *bestHead) SelectQueue(band framework.PriorityBandAccessor) (framework.F
 
 	var bestQueue framework.FlowQueueAccessor
 	var bestItem types.QueueItemAccessor
-
 	var iterationErr error
 	band.IterateQueues(func(queue framework.FlowQueueAccessor) (keepIterating bool) {
 		if queue == nil || queue.Len() == 0 {
 			return true
 		}
+<<<<<<< HEAD
 
 		item := queue.PeekHead()
 		if item == nil {
+=======
+		item, err := queue.PeekHead()
+		if err != nil || item == nil {
+>>>>>>> c7f7795 (feat: Adapt InterFlowDispatchPolicy to be a plugin)
 			return true
 		}
 
@@ -78,15 +100,18 @@ func (p *bestHead) SelectQueue(band framework.PriorityBandAccessor) (framework.F
 			return true
 		}
 
-		if queue.Comparator().ScoreType() != bestQueue.Comparator().ScoreType() {
-			iterationErr = fmt.Errorf("%w: expected %q, got %q", framework.ErrIncompatiblePriorityType,
-				bestQueue.Comparator().ScoreType(), queue.Comparator().ScoreType())
+		comp := queue.Comparator()
+		if comp.ScoreType() != bestQueue.Comparator().ScoreType() {
+			iterationErr = fmt.Errorf("%w: cannot compare queues with different score types, expected %q, got %q",
+				framework.ErrIncompatiblePriorityType,
+				bestQueue.Comparator().ScoreType(),
+				comp.ScoreType())
 			return false
 		}
 
-		if bestQueue.Comparator().Func()(item, bestItem) {
-			bestQueue = queue
+		if comp.Func()(item, bestItem) {
 			bestItem = item
+			bestQueue = queue
 		}
 		return true
 	})

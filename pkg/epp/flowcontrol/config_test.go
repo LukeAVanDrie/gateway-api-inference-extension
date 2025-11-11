@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/interflow"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/registry"
 )
 
@@ -32,7 +33,11 @@ func TestConfig_ValidateAndApplyDefaults(t *testing.T) {
 	// A minimal valid registry config, which is required for the success case.
 	validRegistryConfig := registry.Config{
 		PriorityBands: []registry.PriorityBandConfig{
-			{Priority: 1, PriorityName: "TestBand"},
+			{
+				Priority:                   1,
+				PriorityName:               "TestBand",
+				InterFlowDispatchPolicyRef: interflow.BestHeadType,
+			},
 		},
 	}
 

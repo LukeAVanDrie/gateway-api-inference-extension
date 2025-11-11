@@ -19,6 +19,16 @@ package mocks
 import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+)
+
+var (
+	_ framework.ItemComparator          = &MockItemComparator{}
+	_ framework.FlowQueueAccessor       = &MockFlowQueueAccessor{}
+	_ framework.PriorityBandAccessor    = &MockPriorityBandAccessor{}
+	_ framework.SafeQueue               = &MockSafeQueue{}
+	_ framework.IntraFlowDispatchPolicy = &MockIntraFlowDispatchPolicy{}
+	_ framework.InterFlowDispatchPolicy = &MockInterFlowDispatchPolicy{}
 )
 
 // MockItemComparator is a simple stub mock for the `framework.ItemComparator` interface.
@@ -59,8 +69,6 @@ func (m *MockFlowQueueAccessor) PeekTail() types.QueueItemAccessor {
 	return m.PeekTailV
 }
 
-var _ framework.FlowQueueAccessor = &MockFlowQueueAccessor{}
-
 // MockPriorityBandAccessor is a behavioral mock for the `framework.MockPriorityBandAccessor` interface.
 // Simple accessors are configured with public value fields (e.g., `PriorityV`).
 // Complex methods with logic are configured with function fields (e.g., `IterateQueuesFunc`).
@@ -94,8 +102,6 @@ func (m *MockPriorityBandAccessor) IterateQueues(callback func(queue framework.F
 		m.IterateQueuesFunc(callback)
 	}
 }
-
-var _ framework.PriorityBandAccessor = &MockPriorityBandAccessor{}
 
 // MockSafeQueue is a simple stub mock for the `framework.SafeQueue` interface.
 // It is used for tests that need to control the exact return values of a queue's methods without simulating the queue's
@@ -153,8 +159,6 @@ func (m *MockSafeQueue) Drain() []types.QueueItemAccessor {
 	return nil
 }
 
-var _ framework.SafeQueue = &MockSafeQueue{}
-
 // MockIntraFlowDispatchPolicy is a behavioral mock for the `framework.IntraFlowDispatchPolicy` interface.
 // Simple accessors are configured with public value fields (e.g., `NameV`).
 // Complex methods with logic are configured with function fields (e.g., `SelectItemFunc`).
@@ -178,25 +182,26 @@ func (m *MockIntraFlowDispatchPolicy) SelectItem(queue framework.FlowQueueAccess
 	return nil, nil
 }
 
-var _ framework.IntraFlowDispatchPolicy = &MockIntraFlowDispatchPolicy{}
-
 // MockInterFlowDispatchPolicy is a behavioral mock for the `framework.InterFlowDispatchPolicy` interface.
 // Simple accessors are configured with public value fields (e.g., `NameV`).
 // Complex methods with logic are configured with function fields (e.g., `SelectQueueFunc`).
 type MockInterFlowDispatchPolicy struct {
-	NameV           string
 	SelectQueueFunc func(band framework.PriorityBandAccessor) (framework.FlowQueueAccessor, error)
+	TypedNameV      plugins.TypedName
 }
 
-func (m *MockInterFlowDispatchPolicy) Name() string {
-	return m.NameV
+func (m *MockInterFlowDispatchPolicy) TypedName() plugins.TypedName {
+	if m.TypedNameV.Name == "" && m.TypedNameV.Type == "" {
+		return plugins.TypedName{Type: framework.InterFlowDispatchPolicyType, Name: "mock-interflow-policy"}
+	}
+	return m.TypedNameV
 }
 
-func (m *MockInterFlowDispatchPolicy) SelectQueue(band framework.PriorityBandAccessor) (framework.FlowQueueAccessor, error) {
+func (m *MockInterFlowDispatchPolicy) SelectQueue(
+	band framework.PriorityBandAccessor,
+) (framework.FlowQueueAccessor, error) {
 	if m.SelectQueueFunc != nil {
 		return m.SelectQueueFunc(band)
 	}
 	return nil, nil
 }
-
-var _ framework.InterFlowDispatchPolicy = &MockInterFlowDispatchPolicy{}

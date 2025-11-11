@@ -36,10 +36,12 @@ var (
 	flow3Key = types.FlowKey{ID: "flow3", Priority: 0}
 )
 
-func TestRoundRobin_Name(t *testing.T) {
+func TestRoundRobin_TypedName(t *testing.T) {
 	t.Parallel()
-	policy := newRoundRobin()
-	assert.Equal(t, RoundRobinPolicyName, policy.Name(), "Name should match the policy's constant")
+	const expectedName = "my-inter-flow-plugin"
+	policy := newRoundRobin().withName(expectedName)
+	assert.Equal(t, RoundRobinType, policy.TypedName().Type, "Type should match the policy's constant")
+	assert.Equal(t, expectedName, policy.TypedName().Name, "Name should match the provided value")
 }
 
 func TestRoundRobin_SelectQueue_Logic(t *testing.T) {
