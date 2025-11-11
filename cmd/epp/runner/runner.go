@@ -79,6 +79,8 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 	"sigs.k8s.io/gateway-api-inference-extension/version"
 
+	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
+
 	// --- Scheduling Framework Plugins ---
 	_ "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/multi/prefix"
 	_ "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/picker"
@@ -118,9 +120,19 @@ var flowControlConfig = flowcontrol.Config{
 		// TODO: this should not be hardcoded.
 		PriorityBands: []fcregistry.PriorityBandConfig{
 			{
+				Priority:                   -10,
+				PriorityName:               "Sheddable",
+				InterFlowDispatchPolicyRef: interflow.BestHeadType,
+			},
+			{
 				Priority:                   0,
 				PriorityName:               "Default",
-				InterFlowDispatchPolicyRef: interflow.BestHeadType,
+				InterFlowDispatchPolicyRef: interflow.RoundRobinType,
+			},
+			{
+				Priority:                   10,
+				PriorityName:               "Critical",
+				InterFlowDispatchPolicyRef: interflow.RoundRobinType,
 			},
 		},
 	},
@@ -363,7 +375,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to initialize Flow Controller: %w", err)
 		}
-		go registry.Run(ctx)
+		go func() {
+			registry.Run(ctx)
+		}()
 		admissionController = requestcontrol.NewFlowControlAdmissionController(saturationDetector, fc)
 	} else {
 		setupLog.Info("Experimental Flow Control layer is disabled, using legacy admission control")
@@ -494,6 +508,20 @@ func (r *Runner) parseConfigurationPhaseOne(ctx context.Context) (*configapi.End
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse config - %w", err)
 	}
+
+	// --- Manually add PluginSpecs for in-tree Flow Control plugins ---
+	// TODO: remove this once they are configurable via yaml.
+	rawConfig.Plugins = append(rawConfig.Plugins,
+		configapi.PluginSpec{
+			Name: interflow.BestHeadType,
+			Type: interflow.BestHeadType,
+		},
+		configapi.PluginSpec{
+			Name: interflow.RoundRobinType,
+			Type: interflow.RoundRobinType,
+		},
+	)
+
 
 	r.featureGates = featureGates
 
