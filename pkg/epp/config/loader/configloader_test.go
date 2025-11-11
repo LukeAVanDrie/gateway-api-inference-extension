@@ -34,8 +34,10 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/multi/prefix"
+	_ "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/multi/prefix"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/picker"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/profile"
+	_ "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/scorer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 	"sigs.k8s.io/gateway-api-inference-extension/test/utils"
@@ -56,9 +58,13 @@ type testStruct struct {
 	wantErr    bool
 }
 
-func TestLoadRawConfiguration(t *testing.T) {
+func TestMain(m *testing.M) {
 	registerTestPlugins()
+	code := m.Run()
+	os.Exit(code)
+}
 
+func TestLoadRawConfiguration(t *testing.T) {
 	goodConfig := &configapi.EndpointPickerConfig{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "EndpointPickerConfig",
@@ -162,8 +168,6 @@ func TestLoadRawConfiguration(t *testing.T) {
 }
 
 func TestLoadRawConfigurationWithDefaults(t *testing.T) {
-	registerTestPlugins()
-
 	goodConfig := &configapi.EndpointPickerConfig{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "EndpointPickerConfig",

@@ -34,6 +34,10 @@ const (
 // compile-time type assertion
 var _ framework.Scorer = &QueueScorer{}
 
+func init() {
+	plugins.Register(QueueScorerType, QueueScorerFactory)
+}
+
 // QueueScorerFactory defines the factory function for QueueScorer.
 func QueueScorerFactory(name string, _ json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
 	return NewQueueScorer().WithName(name), nil

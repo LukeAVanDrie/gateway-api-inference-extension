@@ -37,6 +37,10 @@ const (
 // compile-time type validation
 var _ framework.Picker = &MaxScorePicker{}
 
+func init() {
+	plugins.Register(MaxScorePickerType, MaxScorePickerFactory)
+}
+
 // MaxScorePickerFactory defines the factory function for MaxScorePicker.
 func MaxScorePickerFactory(name string, rawParameters json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
 	parameters := pickerParameters{MaxNumOfEndpoints: DefaultMaxNumOfEndpoints}

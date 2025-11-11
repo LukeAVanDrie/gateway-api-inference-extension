@@ -47,6 +47,10 @@ type weightedScoredPod struct {
 // compile-time type validation
 var _ framework.Picker = &WeightedRandomPicker{}
 
+func init() {
+	plugins.Register(WeightedRandomPickerType, WeightedRandomPickerFactory)
+}
+
 // WeightedRandomPickerFactory defines the factory function for WeightedRandomPicker.
 func WeightedRandomPickerFactory(name string, rawParameters json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
 	parameters := pickerParameters{MaxNumOfEndpoints: DefaultMaxNumOfEndpoints}

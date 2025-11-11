@@ -36,6 +36,10 @@ const (
 // compile-time type validation
 var _ framework.Picker = &RandomPicker{}
 
+func init() {
+	plugins.Register(RandomPickerType, RandomPickerFactory)
+}
+
 // RandomPickerFactory defines the factory function for RandomPicker.
 func RandomPickerFactory(name string, rawParameters json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
 	parameters := pickerParameters{MaxNumOfEndpoints: DefaultMaxNumOfEndpoints}

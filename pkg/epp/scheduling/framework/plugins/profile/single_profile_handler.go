@@ -34,6 +34,10 @@ const (
 // compile-time type assertion
 var _ framework.ProfileHandler = &SingleProfileHandler{}
 
+func init() {
+	plugins.Register(SingleProfileHandlerType, SingleProfileHandlerFactory)
+}
+
 // SingleProfileHandlerFactory defines the factory function for SingleProfileHandler.
 func SingleProfileHandlerFactory(name string, _ json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
 	return NewSingleProfileHandler().WithName(name), nil

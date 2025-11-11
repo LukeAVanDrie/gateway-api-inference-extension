@@ -33,6 +33,10 @@ const (
 // compile-time type assertion
 var _ framework.Scorer = &LoraAffinityScorer{}
 
+func init() {
+	plugins.Register(LoraAffinityScorerType, LoraAffinityScorerFactory)
+}
+
 // LoraAffinityScorerFactory defines the factory function for LoraAffinityScorer.
 func LoraAffinityScorerFactory(name string, _ json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
 	return NewLoraAffinityScorer().WithName(name), nil

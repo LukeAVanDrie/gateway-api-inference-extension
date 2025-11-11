@@ -33,6 +33,10 @@ const (
 // compile-time type assertion
 var _ framework.Scorer = &KVCacheUtilizationScorer{}
 
+func init() {
+	plugins.Register(KvCacheUtilizationScorerType, KvCacheUtilizationScorerFactory)
+}
+
 // KvCacheUtilizationScorerFactory defines the factory function for KVCacheUtilizationScorer.
 func KvCacheUtilizationScorerFactory(name string, _ json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
 	return NewKVCacheUtilizationScorer().WithName(name), nil

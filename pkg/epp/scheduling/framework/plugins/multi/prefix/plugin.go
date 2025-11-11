@@ -149,6 +149,10 @@ var (
 	_ requestcontrol.PreRequest = &Plugin{}
 )
 
+func init() {
+	plugins.Register(PrefixCachePluginType, PrefixCachePluginFactory)
+}
+
 // PrefixCachePluginFactory defines the factory function for Prefix plugin.
 func PrefixCachePluginFactory(name string, rawParameters json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
 	parameters := DefaultConfig

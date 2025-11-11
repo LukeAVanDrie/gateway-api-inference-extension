@@ -36,6 +36,10 @@ const (
 // compile-time type assertion
 var _ framework.Filter = &HeaderBasedTestingFilter{}
 
+func init() {
+	plugins.Register(HeaderBasedTestingFilterType, HeaderBasedTestingFilterFactory)
+}
+
 // HeaderBasedTestingFilterFactory defines the factory function for HeaderBasedTestingFilter.
 func HeaderBasedTestingFilterFactory(name string, _ json.RawMessage, _ plugins.Handle) (plugins.Plugin, error) {
 	return NewHeaderBasedTestingFilter().WithName(name), nil
