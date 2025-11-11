@@ -77,6 +77,8 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/env"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 	"sigs.k8s.io/gateway-api-inference-extension/version"
+
+	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 )
 
 const (
@@ -342,7 +344,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to initialize Flow Controller: %w", err)
 		}
-		go registry.Run(ctx)
+		go func() {
+			registry.Run(ctx)
+		}()
 		admissionController = requestcontrol.NewFlowControlAdmissionController(saturationDetector, fc)
 	} else {
 		setupLog.Info("Experimental Flow Control layer is disabled, using legacy admission control")

@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
 
@@ -79,6 +80,8 @@ type ShardProcessor struct {
 	wg             sync.WaitGroup
 	isShuttingDown atomic.Bool
 	shutdownOnce   sync.Once
+
+	saturated atomic.Bool
 }
 
 // NewShardProcessor creates a new ShardProcessor instance.
@@ -166,6 +169,10 @@ func (sp *ShardProcessor) Run(ctx context.Context) {
 
 	// Create a ticker for periodic dispatch attempts to avoid tight loops
 	dispatchTicker := sp.clock.NewTicker(time.Millisecond)
+	defer dispatchTicker.Stop()
+
+	// Create a ticker for periodic dispatch attempts to avoid tight loops
+	dispatchTicker := sp.clock.NewTicker(time.Millisecond) // we may adjust interval as needed
 	defer dispatchTicker.Stop()
 
 	// This is the main worker loop. It continuously processes incoming requests and dispatches queued requests until the
@@ -311,6 +318,7 @@ func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
 		if sp.saturationDetector.IsSaturated(ctx, candidatePods) {
 			sp.logger.V(logutil.DEBUG).Info("Policy's chosen item is saturated; enforcing HoL blocking.",
 				"flowKey", req.FlowKey(), "reqID", req.ID(), "priorityName", originalBand.PriorityName())
+			sp.saturated.Store(true)
 			// Stop the dispatch cycle entirely to respect strict policy decision and prevent priority inversion where
 			// lower-priority work might exacerbate the saturation affecting high-priority work.
 			return false
@@ -393,6 +401,11 @@ func (sp *ShardProcessor) runCleanupSweep(ctx context.Context) {
 			return
 		case <-ticker.C():
 			sp.sweepFinalizedItems()
+			if sp.saturated.CompareAndSwap(true, false) {
+				metrics.RecordFlowControlIsSaturated(true)
+			} else {
+				metrics.RecordFlowControlIsSaturated(false)
+			}
 		}
 	}
 }

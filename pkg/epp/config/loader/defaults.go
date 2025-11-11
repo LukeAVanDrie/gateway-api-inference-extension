@@ -84,6 +84,12 @@ func setDefaultsPhaseOne(cfg *configapi.EndpointPickerConfig) {
 func setDefaultsPhaseTwo(cfg *configapi.EndpointPickerConfig, handle plugins.Handle) {
 	allPlugins := handle.GetAllPluginsWithNames()
 
+	saturationSignalRecorder := saturationdetector.NewSaturationSignalRecorder(&saturationdetector.SignalRecorderConfig{})
+	saturationController := saturationdetector.NewSaturationController(
+		&saturationdetector.ControllerConfig{},
+		saturationSignalRecorder,
+	)
+
 	// If No SchedulerProfiles were specified in the confguration,
 	// create one named default with references to all of the scheduling
 	// plugins mentioned in the Plugins section of the configuration.
@@ -145,6 +151,7 @@ func setDefaultsPhaseTwo(cfg *configapi.EndpointPickerConfig, handle plugins.Han
 				cfg.SchedulingProfiles[idx] = theProfile
 			} else if _, ok := referencedPlugin.(framework.Picker); ok {
 				hasPicker = true
+				// wrap the picker here?
 				break
 			}
 		}

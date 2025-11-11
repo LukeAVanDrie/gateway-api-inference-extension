@@ -17,18 +17,43 @@ limitations under the License.
 package main
 
 import (
+	"fmt"
 	"os"
+	"runtime/debug"
 
+	"github.com/go-logr/logr"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"sigs.k8s.io/gateway-api-inference-extension/cmd/epp/runner"
 )
 
 func main() {
+	logger := ctrl.Log.WithName("main")
+	if err := run(logger); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run(logger logr.Logger) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error(fmt.Errorf("panic in main: %v", r), "Panic Occurred",
+				"stack", string(debug.Stack()))
+			// Ensure the error is returned to main to cause an exit
+			if err == nil {
+				err = fmt.Errorf("panic: %v", r)
+			}
+		}
+	}()
+
+	logger.Info("Starting EPP Runner")
 	// For adding out-of-tree plugins to the plugins registry, use the following:
 	// plugins.Register(my-out-of-tree-plugin-name, my-out-of-tree-plugin-factory-function)
 
 	if err := runner.NewRunner().Run(ctrl.SetupSignalHandler()); err != nil {
-		os.Exit(1)
+		logger.Error(err, "Runner failed")
+		return err
 	}
+	logger.Info("EPP Runner terminated gracefully")
+	return nil
 }

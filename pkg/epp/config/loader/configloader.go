@@ -110,6 +110,9 @@ func loadSchedulerConfig(configProfiles []configapi.SchedulingProfile, handle pl
 			if scorer, ok := referencedPlugin.(framework.Scorer); ok {
 				referencedPlugin = framework.NewWeightedScorer(scorer, *plugin.Weight)
 			}
+			if picker, ok := referencedPlugin.(framework.Picker); ok {
+				referencedPlugin = saturationdetector.NewControlAwarePicker(picker)
+			}
 			if err := profile.AddPlugins(referencedPlugin); err != nil {
 				return nil, fmt.Errorf("failed to load scheduler config - %w", err)
 			}

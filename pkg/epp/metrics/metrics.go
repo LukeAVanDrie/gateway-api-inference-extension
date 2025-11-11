@@ -373,6 +373,14 @@ var (
 		},
 		[]string{"fairness_id", "priority"},
 	)
+
+	flowControlIsSaturated = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Subsystem: InferenceExtension,
+			Name:      "flow_control_is_saturated",
+			Help:      metricsutil.HelpMsgWithStability("A boolean gauge indicating if the Flow Control layer considers the InferencePool to be saturated (1 for saturated, 0 for not saturated).", compbasemetrics.ALPHA),
+		},
+	)
 )
 
 var registerMetrics sync.Once
@@ -416,6 +424,7 @@ func Register(customCollectors ...prometheus.Collector) {
 		metrics.Registry.MustRegister(PrefixCacheHitLength)
 		metrics.Registry.MustRegister(flowControlRequestQueueDuration)
 		metrics.Registry.MustRegister(flowControlQueueSize)
+		metrics.Registry.MustRegister(flowControlIsSaturated)
 		for _, collector := range customCollectors {
 			metrics.Registry.MustRegister(collector)
 		}
@@ -460,6 +469,7 @@ func Reset() {
 	PrefixCacheHitLength.Reset()
 	flowControlRequestQueueDuration.Reset()
 	flowControlQueueSize.Reset()
+	flowControlIsSaturated.Set(0)
 }
 
 // RecordRequstCounter records the number of requests.
@@ -736,4 +746,13 @@ func SetTTFTSLOThreshold(modelName, targetModelName string, threshold float64) {
 // This allows dynamic threshold management and makes the threshold visible in metrics.
 func SetTPOTSLOThreshold(modelName, targetModelName string, threshold float64) {
 	inferenceGauges.With(prometheus.Labels{"model_name": modelName, "target_model_name": targetModelName, "type": "tpot_slo_threshold"}).Set(threshold)
+}
+
+// RecordFlowControlIsSaturated sets the saturation status gauge.
+func RecordFlowControlIsSaturated(isSaturated bool) {
+	if isSaturated {
+		flowControlIsSaturated.Set(1)
+	} else {
+		flowControlIsSaturated.Set(0)
+	}
 }

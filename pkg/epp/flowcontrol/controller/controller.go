@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -113,6 +114,16 @@ type FlowController struct {
 
 	// wg waits for all worker goroutines to terminate during shutdown.
 	wg sync.WaitGroup
+
+	// totalWaitingRequests is a "fast path" counter for instantaneous telemetry needed by the SaturationController.
+	//
+	// While this data can be extracted from fc.registry.ShardStats(), doing so requires an O(N) sweep of all shards,
+	// acquiring read locks, and performing heavy allocations. That approach is suitable for human-speed observability
+	// (e.g., metrics scraping) but is too expensive for the machine-speed control loop of the SaturationController.
+	//
+	// This counter provides an O(1), lock-free view of the total system backlog. It is passed by pointer to every worker
+	// (ShardProcessor), which updates it atomically during enqueue, dispatch, and eviction events.
+	totalWaitingRequests *atomic.Int64
 }
 
 // flowControllerOption is a function that applies a configuration change.
