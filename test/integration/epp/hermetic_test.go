@@ -63,6 +63,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datastore"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/queuemonitor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metadata"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
@@ -1195,14 +1196,13 @@ func BeforeSuite() func() {
 	schedulerConfig := scheduling.NewSchedulerConfig(profileHandler, map[string]*framework.SchedulerProfile{"default": defaultProfile})
 	scheduler := scheduling.NewSchedulerWithConfig(schedulerConfig)
 
-	sdConfig := &saturationdetector.Config{
-		QueueDepthThreshold:       saturationdetector.DefaultQueueDepthThreshold,
-		KVCacheUtilThreshold:      saturationdetector.DefaultKVCacheUtilThreshold,
-		MetricsStalenessThreshold: saturationdetector.DefaultMetricsStalenessThreshold,
-	}
-	detector := saturationdetector.NewDetector(sdConfig, logger.WithName("saturation-detector"))
-	serverRunner.SaturationDetector = detector
-	admissionController := requestcontrol.NewLegacyAdmissionController(detector)
+	qm := queuemonitor.NewQueueMonitor("")
+	recorderCfg, _ := saturationdetector.NewSignalRecorderConfigBuilder().Build()
+	recorder := saturationdetector.NewSaturationSignalRecorder(recorderCfg)
+	satCfg, _ := saturationdetector.NewControllerConfigBuilder().Build()
+	satCtrl := saturationdetector.NewSaturationController(satCfg, recorder, qm, serverRunner.Datastore)
+	serverRunner.SaturationController = satCtrl
+	admissionController := requestcontrol.NewLegacyAdmissionController(satCtrl)
 	serverRunner.Director = requestcontrol.NewDirectorWithConfig(serverRunner.Datastore, scheduler, admissionController, requestcontrol.NewConfig())
 	serverRunner.SecureServing = false
 

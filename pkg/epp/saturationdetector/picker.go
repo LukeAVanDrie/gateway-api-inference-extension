@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"k8s.io/apimachinery/pkg/util/sets"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 )
@@ -49,6 +50,8 @@ func NewProbePicker(controller *SaturationController, delegate framework.Picker)
 		delegate:   delegate,
 	}
 }
+
+func (p *ProbePicker) TypedName() plugins.TypedName { return p.delegate.TypedName() }
 
 func (p *ProbePicker) Pick(
 	ctx context.Context,

@@ -18,6 +18,8 @@ package saturationdetector
 
 import (
 	"time"
+
+	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 )
 
 // =====================================================================================================================
@@ -256,6 +258,21 @@ func (c *SignalRecorderConfig) setDefaults() {
 
 // setDefaults applies the standard physics-based defaults to any optional fields that are not explicitly set.
 func (c *ControllerConfig) setDefaults() {
+	// --- Required Wiring Defaults ---
+	if c.SignalRecorderPluginName == "" {
+		// Default to the standard plugin name constant.
+		// This matches the default injection in loader/defaults.go.
+		c.SignalRecorderPluginName = SaturationSignalRecorderType
+	}
+
+	if c.MaxQueueLatency == 0 {
+		// Default: 5s.
+		// Rationale: A reasonable middle ground. It allows for some queuing (burst absorption) without allowing requests to
+		// rot in the queue for a long time.
+		// Operators SHOULD override this based on their SLOs.
+		c.MaxQueueLatency = 5 * time.Second
+	}
+
 	// --- Control Loop Parameters ---
 	if c.SaturationSetpoint == 0 {
 		c.SaturationSetpoint = DefaultSaturationSetpoint
@@ -318,4 +335,92 @@ func (c *ControllerConfig) setDefaults() {
 	if c.MinBatchSampleInterval == 0 {
 		c.MinBatchSampleInterval = DefaultMinBatchSampleInterval
 	}
+}
+
+// LoadSaturationDetectorConfig maps the APIX config to the Internal ControllerConfig.
+// Note: setDefaults() is NOT called here; it is the caller's responsibility (e.g., the Builder).
+func LoadControllerConfigFromAPIX(sd *configapi.SaturationController) *ControllerConfig {
+	if sd == nil {
+		return &ControllerConfig{}
+	}
+
+	c := &ControllerConfig{}
+
+	if sd.SaturationSetpoint != nil {
+		c.SaturationSetpoint = *sd.SaturationSetpoint
+	}
+	if sd.SaturationHeadroom != nil {
+		c.SaturationHeadroom = *sd.SaturationHeadroom
+	}
+	if sd.ProportionalGain != nil {
+		c.ProportionalGain = *sd.ProportionalGain
+	}
+	if sd.MinDispatchRate != nil {
+		c.MinDispatchRate = *sd.MinDispatchRate
+	}
+	if sd.MaxQueueLatency != nil {
+		c.MaxQueueLatency = sd.MaxQueueLatency.Duration
+	}
+	if sd.EffectiveBatchAlpha != nil {
+		c.EffectiveBatchAlpha = *sd.EffectiveBatchAlpha
+	}
+	if sd.QueueDepthAlpha != nil {
+		c.QueueDepthAlpha = *sd.QueueDepthAlpha
+	}
+	if sd.ServiceRateWindow != nil {
+		c.ServiceRateWindow = sd.ServiceRateWindow.Duration
+	}
+	if sd.PeakInflightConcurrencyWindow != nil {
+		c.PeakInflightConcurrencyWindow = sd.PeakInflightConcurrencyWindow.Duration
+	}
+	if sd.PeakInflightConcurrencySamples != nil {
+		c.PeakInflightConcurrencySamples = *sd.PeakInflightConcurrencySamples
+	}
+	if sd.KVCacheWindow != nil {
+		c.KVCacheWindow = sd.KVCacheWindow.Duration
+	}
+	if sd.KVCacheSamples != nil {
+		c.KVCacheSamples = *sd.KVCacheSamples
+	}
+	if sd.MaturityQuorumPercentage != nil {
+		c.MaturityQuorumPercentage = *sd.MaturityQuorumPercentage
+	}
+	if sd.DormantTimeout != nil {
+		c.DormantTimeout = sd.DormantTimeout.Duration
+	}
+	if sd.MetricsStalenessThreshold != nil {
+		c.MetricsStalenessThreshold = sd.MetricsStalenessThreshold.Duration
+	}
+	if sd.MinSamplesForEffectiveBatchMaturity != nil {
+		c.MinSamplesForEffectiveBatchMaturity = *sd.MinSamplesForEffectiveBatchMaturity
+	}
+	if sd.MinEffectiveCountForServiceRateMaturity != nil {
+		c.MinEffectiveCountForServiceRateMaturity = *sd.MinEffectiveCountForServiceRateMaturity
+	}
+	if sd.MinBatchSampleInterval != nil {
+		c.MinBatchSampleInterval = sd.MinBatchSampleInterval.Duration
+	}
+	if sd.SignalRecorderPluginName != "" {
+		c.SignalRecorderPluginName = sd.SignalRecorderPluginName
+	}
+
+	return c
+}
+
+// LoadSignalRecorderConfigFromAPIX maps the APIX config to the Internal SignalRecorderConfig.
+func LoadSignalRecorderConfigFromAPIX(ssr *configapi.SaturationSignalRecorder) *SignalRecorderConfig {
+	if ssr == nil {
+		return &SignalRecorderConfig{}
+	}
+
+	c := &SignalRecorderConfig{}
+
+	if ssr.TickInterval != nil {
+		c.TickInterval = ssr.TickInterval.Duration
+	}
+	if ssr.MaxExpectedCompletionsQPS != nil {
+		c.MaxExpectedCompletionsQPS = *ssr.MaxExpectedCompletionsQPS
+	}
+
+	return c
 }

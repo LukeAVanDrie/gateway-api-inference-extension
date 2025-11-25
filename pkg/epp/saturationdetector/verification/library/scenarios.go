@@ -27,7 +27,7 @@ import (
 const (
 	// ScenSmokeTest is a minimal run to verify system stability.
 	// Target: 1 Pod, 50% Load.
-	ScenSmokeTest framework.ScenarioID = "Smoke-Test"
+	ScenSmokeTest   framework.ScenarioID = "Smoke-Test"
 	ScenHoLBlocking framework.ScenarioID = "HoL-Blocking"
 )
 
@@ -52,7 +52,7 @@ var StandardScenarios = map[framework.ScenarioID]framework.Scenario{
 	// 		if score.Control.IAE == 0 {
 	// 			t.Error(`
 	// 				Control IAE is 0.0. This is statistically impossible for a dynamic simulation.
-  //         Causes:
+	//         Causes:
 	// 				  1. Controller halted/crashed.
 	// 					2. Metrics pipeline broken (reading 0s).
 	// 					3. Trivial scenario (Load=0).`)
@@ -80,7 +80,7 @@ var StandardScenarios = map[framework.ScenarioID]framework.Scenario{
 			// if score.Control.IAE == 0 {
 			// 	t.Error(`
 			// 		Control IAE is 0.0. This is statistically impossible for a dynamic simulation.
-      //     Causes:
+			//     Causes:
 			// 		  1. Controller halted/crashed.
 			// 			2. Metrics pipeline broken (reading 0s).
 			// 			3. Trivial scenario (Load=0).`)

@@ -29,7 +29,6 @@ import (
 	"slices"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -54,6 +53,10 @@ type shardProcessor interface {
 	Run(ctx context.Context)
 	Submit(item *internal.FlowItem) error
 	SubmitOrBlock(ctx context.Context, item *internal.FlowItem) error
+}
+
+type queueMonitor interface {
+	Adjust(delta int64)
 }
 
 // shardProcessorFactory defines the signature for creating a shardProcessor.
@@ -96,6 +99,7 @@ type FlowController struct {
 	config                Config
 	registry              registryClient
 	saturationDetector    contracts.SaturationDetector
+	queueMonitor          queueMonitor
 	clock                 clock.WithTicker
 	logger                logr.Logger
 	shardProcessorFactory shardProcessorFactory
@@ -114,16 +118,6 @@ type FlowController struct {
 
 	// wg waits for all worker goroutines to terminate during shutdown.
 	wg sync.WaitGroup
-
-	// totalWaitingRequests is a "fast path" counter for instantaneous telemetry needed by the SaturationController.
-	//
-	// While this data can be extracted from fc.registry.ShardStats(), doing so requires an O(N) sweep of all shards,
-	// acquiring read locks, and performing heavy allocations. That approach is suitable for human-speed observability
-	// (e.g., metrics scraping) but is too expensive for the machine-speed control loop of the SaturationController.
-	//
-	// This counter provides an O(1), lock-free view of the total system backlog. It is passed by pointer to every worker
-	// (ShardProcessor), which updates it atomically during enqueue, dispatch, and eviction events.
-	totalWaitingRequests *atomic.Int64
 }
 
 // flowControllerOption is a function that applies a configuration change.
@@ -137,6 +131,7 @@ func NewFlowController(
 	config Config,
 	registry contracts.FlowRegistry,
 	sd contracts.SaturationDetector,
+	qm queueMonitor,
 	logger logr.Logger,
 	opts ...flowControllerOption,
 ) (*FlowController, error) {
@@ -144,6 +139,7 @@ func NewFlowController(
 		config:             config,
 		registry:           registry,
 		saturationDetector: sd,
+		queueMonitor:       qm,
 		clock:              clock.RealClock{},
 		logger:             logger.WithName("flow-controller"),
 		parentCtx:          ctx,
@@ -221,6 +217,8 @@ func (fc *FlowController) EnqueueAndWait(
 	priority := strconv.Itoa(flowKey.Priority)
 	metrics.IncFlowControlQueueSize(fairnessID, priority)
 	defer metrics.DecFlowControlQueueSize(fairnessID, priority)
+	fc.queueMonitor.Adjust(1)
+	defer fc.queueMonitor.Adjust(-1)
 
 	// 1. Create the derived context that governs this request's lifecycle (Parent Cancellation + TTL).
 	reqCtx, cancel, enqueueTime := fc.createRequestContext(ctx, req)

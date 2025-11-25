@@ -27,6 +27,7 @@ import (
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	fctypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -38,8 +39,12 @@ type mockSaturationDetector struct {
 	isSaturated bool
 }
 
-func (m *mockSaturationDetector) IsSaturated(_ context.Context, _ []backendmetrics.PodMetrics) bool {
-	return m.isSaturated
+func (m *mockSaturationDetector) Introspect() saturationdetector.ControllerState {
+	saturation := 0.8
+	if m.isSaturated {
+		saturation = 1.25
+	}
+	return saturationdetector.ControllerState{AvgSaturation: saturation}
 }
 
 type mockFlowController struct {

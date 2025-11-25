@@ -24,10 +24,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+	rcplugins "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 )
 
-var _ PrepareDataPlugin = &mockPrepareRequestDataPlugin{}
+var _ rcplugins.PrepareDataPlugin = &mockPrepareRequestDataPlugin{}
 
 type mockPrepareRequestDataPlugin struct {
 	name      string
@@ -64,30 +65,30 @@ func TestPrepareDataPluginsWithTimeout(t *testing.T) {
 	testCases := []struct {
 		name          string
 		timeout       time.Duration
-		plugins       []PrepareDataPlugin
+		plugins       []rcplugins.PrepareDataPlugin
 		ctxFn         func() (context.Context, context.CancelFunc)
 		expectErrStr  string
-		checkPlugins  func(t *testing.T, plugins []PrepareDataPlugin)
+		checkPlugins  func(t *testing.T, plugins []rcplugins.PrepareDataPlugin)
 		expectSuccess bool
 	}{
 		{
 			name:    "success with one plugin",
 			timeout: 100 * time.Millisecond,
-			plugins: []PrepareDataPlugin{
+			plugins: []rcplugins.PrepareDataPlugin{
 				&mockPrepareRequestDataPlugin{name: "p1"},
 			},
 			ctxFn: func() (context.Context, context.CancelFunc) {
 				return context.Background(), func() {}
 			},
 			expectSuccess: true,
-			checkPlugins: func(t *testing.T, plugins []PrepareDataPlugin) {
+			checkPlugins: func(t *testing.T, plugins []rcplugins.PrepareDataPlugin) {
 				assert.True(t, plugins[0].(*mockPrepareRequestDataPlugin).executed)
 			},
 		},
 		{
 			name:    "plugin returns error",
 			timeout: 100 * time.Millisecond,
-			plugins: []PrepareDataPlugin{
+			plugins: []rcplugins.PrepareDataPlugin{
 				&mockPrepareRequestDataPlugin{name: "p1", returnErr: errors.New("plugin failed")},
 			},
 			ctxFn: func() (context.Context, context.CancelFunc) {
@@ -98,7 +99,7 @@ func TestPrepareDataPluginsWithTimeout(t *testing.T) {
 		{
 			name:    "plugins time out",
 			timeout: 50 * time.Millisecond,
-			plugins: []PrepareDataPlugin{
+			plugins: []rcplugins.PrepareDataPlugin{
 				&mockPrepareRequestDataPlugin{name: "p1", delay: 100 * time.Millisecond},
 			},
 			ctxFn: func() (context.Context, context.CancelFunc) {
@@ -109,7 +110,7 @@ func TestPrepareDataPluginsWithTimeout(t *testing.T) {
 		{
 			name:    "context cancelled",
 			timeout: 200 * time.Millisecond,
-			plugins: []PrepareDataPlugin{
+			plugins: []rcplugins.PrepareDataPlugin{
 				&mockPrepareRequestDataPlugin{name: "p1", delay: 100 * time.Millisecond},
 			},
 			ctxFn: func() (context.Context, context.CancelFunc) {
@@ -122,7 +123,7 @@ func TestPrepareDataPluginsWithTimeout(t *testing.T) {
 		{
 			name:    "multiple plugins success",
 			timeout: 100 * time.Millisecond,
-			plugins: []PrepareDataPlugin{
+			plugins: []rcplugins.PrepareDataPlugin{
 				&mockPrepareRequestDataPlugin{name: "p1"},
 				&mockPrepareRequestDataPlugin{name: "p2"},
 			},
@@ -130,7 +131,7 @@ func TestPrepareDataPluginsWithTimeout(t *testing.T) {
 				return context.Background(), func() {}
 			},
 			expectSuccess: true,
-			checkPlugins: func(t *testing.T, plugins []PrepareDataPlugin) {
+			checkPlugins: func(t *testing.T, plugins []rcplugins.PrepareDataPlugin) {
 				assert.True(t, plugins[0].(*mockPrepareRequestDataPlugin).executed)
 				assert.True(t, plugins[1].(*mockPrepareRequestDataPlugin).executed)
 			},

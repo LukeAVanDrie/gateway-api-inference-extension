@@ -30,7 +30,7 @@ import (
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
 )
@@ -251,7 +251,7 @@ func TestSLOAwareRouter_ResponseReceived_NilPredictor(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	sloCtx := newSLORequestContext(request)
 	router.setSLOContextForRequest(request, sloCtx)
@@ -271,7 +271,7 @@ func TestSLOAwareRouter_ResponseReceived_NoPod(t *testing.T) {
 
 	ctx := context.Background()
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	sloCtx := newSLORequestContext(request)
 	router.setSLOContextForRequest(request, sloCtx)
@@ -291,7 +291,7 @@ func TestSLOAwareRouter_ResponseReceived_NoContext(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	// Don't set SLO context
 	router.ResponseReceived(ctx, request, response, pod.GetPod())
@@ -307,7 +307,7 @@ func TestSLOAwareRouter_ResponseStreaming_NilPredictor(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	sloCtx := newSLORequestContext(request)
 	router.setSLOContextForRequest(request, sloCtx)
@@ -327,7 +327,7 @@ func TestSLOAwareRouter_ResponseStreaming_FirstToken(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 	schedulingResult := createTestSchedulingResult(pod.GetPod())
 
 	sloCtx := newSLORequestContext(request)
@@ -378,7 +378,7 @@ func TestSLOAwareRouter_ResponseStreaming_SubsequentTokens(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 	schedulingResult := createTestSchedulingResult(pod.GetPod())
 
 	sloCtx := newSLORequestContext(request)
@@ -426,7 +426,7 @@ func TestSLOAwareRouter_ResponseComplete_QueueNotFound(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	sloCtx := newSLORequestContext(request)
 	sloCtx.incomingModelName = testModelName
@@ -451,7 +451,7 @@ func TestSLOAwareRouter_ResponseStreaming_NoContext(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	// Don't set SLO context - should handle gracefully
 	router.ResponseStreaming(ctx, request, response, pod.GetPod())
@@ -468,7 +468,7 @@ func TestSLOAwareRouter_ResponseComplete_Success(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	// Create queue and add request
 	queue := newRequestPriorityQueue()
@@ -502,7 +502,7 @@ func TestSLOAwareRouter_ResponseComplete_NilPredictor(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	sloCtx := newSLORequestContext(request)
 	router.setSLOContextForRequest(request, sloCtx)
@@ -522,7 +522,7 @@ func TestSLOAwareRouter_ResponseComplete_NoPod(t *testing.T) {
 
 	ctx := context.Background()
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	sloCtx := newSLORequestContext(request)
 	router.setSLOContextForRequest(request, sloCtx)
@@ -543,7 +543,7 @@ func TestSLOAwareRouter_ResponseComplete_NoContext(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	// Don't set SLO context - should handle gracefully
 	router.ResponseComplete(ctx, request, response, pod.GetPod())
@@ -560,7 +560,7 @@ func TestSLOAwareRouter_ResponseComplete_WithMetrics(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	// Create queue
 	queue := newRequestPriorityQueue()
@@ -593,7 +593,7 @@ func TestSLOAwareRouter_ResponseComplete_NoSLOs(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test-id", 0, 0, true) // No SLOs
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 
 	// Create queue
 	queue := newRequestPriorityQueue()
@@ -783,7 +783,7 @@ func TestSLOAwareRouter_RequestLifecycle_Complete(t *testing.T) {
 	ctx := context.Background()
 	pod := createTestPod("test-pod", 1, 1, 1)
 	request := createTestLLMRequest("test", 100, 50, true)
-	response := &requestcontrol.Response{}
+	response := &plugins.Response{}
 	schedulingResult := createTestSchedulingResult(pod.GetPod())
 
 	// Create initial context

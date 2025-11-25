@@ -28,7 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/utils/clock"
 
+	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/queuemonitor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 )
 
@@ -51,16 +53,19 @@ type Datastore interface {
 }
 
 func init() {
-	plugins.RegisterWithMetadata(SaturationControllerType, plugins.PluginRegistration{
-		Factory:   SaturationControllerFactory,
-		Lifecycle: plugins.LifecycleSingleton,
-	})
+	plugins.Register(SaturationControllerType, SaturationControllerFactory)
 }
 
 // SaturationControllerFactory defines the factory function for SaturationController.
-func SaturationControllerFactory(name string, _ json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
-	config := &ControllerConfig{}
-	config.setDefaults() // TODO: Bind from JSON parameters
+func SaturationControllerFactory(name string, params json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
+	apixConfig := &configapi.SaturationController{}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, apixConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal parameters for %s: %w", name, err)
+		}
+	}
+	config := LoadControllerConfigFromAPIX(apixConfig)
+	config.setDefaults()
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
@@ -70,8 +75,10 @@ func SaturationControllerFactory(name string, _ json.RawMessage, handle plugins.
 		return nil, fmt.Errorf("failed to resolve dependency '%s': %w", config.SignalRecorderPluginName, err)
 	}
 
-	// TODO: Resolve QueueMonitor from handle
-	var qm QueueMonitor
+	qm, err := plugins.PluginByType[*queuemonitor.QueueMonitor](handle, queuemonitor.QueueMonitorType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve QueueMonitor: %w", err)
+	}
 
 	return NewSaturationController(config, recorder, qm, handle, WithName(name)), nil
 }
@@ -179,6 +186,7 @@ func NewSaturationController(
 		datastore:    ds,
 		pods:         make(map[string]*podState),
 		clock:        clock.RealClock{},
+		regime: Halted,
 	}
 	for _, opt := range options {
 		opt(sc)
@@ -606,15 +614,15 @@ func getPodConcurrencyLimit(p *podState, config *ControllerConfig) float64 {
 	case Immature, Dormant:
 		// Discovery Mode (Hill Climbing):
 		// We use the "Best Seen" concurrency (L_peak) as the baseline.
-		limit, _ := p.peakInflightConcurrency.Get()
+		limit, _ := max(p.peakInflightConcurrency.Get(), seed)
 
 		// SAFETY BRAKE:
 		// If the pod has a sustained queue, it indicates we have exceeded the physical service rate of the backend
 		// (Little's Law violation).
 		// We stop climbing while waiting for the maturity samples to collect.
-		if p.queueDepthEWMA.Get() > 3.0 {
+		if q := p.queueDepthEWMA.Get(); q > 3.0 {
 			// Hold the current limit (L_peak).
-			return limit
+			return limit - q
 		}
 
 		// If the queue is empty, we assume there is still headroom.

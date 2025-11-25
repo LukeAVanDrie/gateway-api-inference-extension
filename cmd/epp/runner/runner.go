@@ -60,6 +60,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datastore"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol"
 	fccontroller "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/queuemonitor"
 	fcregistry "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/registry"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics/collectors"
@@ -77,8 +78,6 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/env"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 	"sigs.k8s.io/gateway-api-inference-extension/version"
-
-	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 )
 
 const (
@@ -324,7 +323,18 @@ func (r *Runner) Run(ctx context.Context) error {
 
 	scheduler := scheduling.NewSchedulerWithConfig(r.schedulerConfig)
 
-	saturationDetector := saturationdetector.NewDetector(eppConfig.SaturationDetectorConfig, setupLog)
+	// --- Saturation Detection Wiring ---
+	satCtrl, err := plugins.PluginByType[*saturationdetector.SaturationController](
+		eppConfig.Handle,
+		saturationdetector.SaturationControllerType,
+	)
+	if err != nil {
+		setupLog.Error(err, "failed to create Saturation Controller")
+		return err
+	}
+	go func() {
+		satCtrl.Start(ctx)
+	}()
 
 	// --- Admission Control Initialization ---
 	var admissionController requestcontrol.AdmissionController
@@ -340,17 +350,17 @@ func (r *Runner) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to initialize Flow Registry: %w", err)
 		}
-		fc, err := fccontroller.NewFlowController(ctx, fcCfg.Controller, registry, saturationDetector, setupLog)
+		fc, err := fccontroller.NewFlowController(ctx, fcCfg.Controller, registry, satCtrl, queuemonitor.NewQueueMonitor(""), setupLog)
 		if err != nil {
 			return fmt.Errorf("failed to initialize Flow Controller: %w", err)
 		}
 		go func() {
 			registry.Run(ctx)
 		}()
-		admissionController = requestcontrol.NewFlowControlAdmissionController(saturationDetector, fc)
+		admissionController = requestcontrol.NewFlowControlAdmissionController(satCtrl, fc)
 	} else {
 		setupLog.Info("Experimental Flow Control layer is disabled, using legacy admission control")
-		admissionController = requestcontrol.NewLegacyAdmissionController(saturationDetector)
+		admissionController = requestcontrol.NewLegacyAdmissionController(satCtrl)
 	}
 
 	director := requestcontrol.NewDirectorWithConfig(
@@ -371,7 +381,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		RefreshPrometheusMetricsInterval: *refreshPrometheusMetricsInterval,
 		MetricsStalenessThreshold:        *metricsStalenessThreshold,
 		Director:                         director,
-		SaturationDetector:               saturationDetector,
+		SaturationController:             satCtrl,
 		UseExperimentalDatalayerV2:       r.featureGates[datalayer.FeatureGate], // pluggable data layer feature flag
 	}
 	if err := serverRunner.SetupWithManager(ctx, mgr); err != nil {
@@ -511,31 +521,6 @@ func (r *Runner) deprecatedConfigurationHelper(cfg *config.Config, logger logr.L
 	if _, ok := os.LookupEnv(enableExperimentalFlowControlLayer); ok {
 		logger.Info("Enabling the experimental Flow Control layer using environment variables is deprecated and will be removed in next version")
 		r.featureGates[flowcontrol.FeatureGate] = env.GetEnvBool(enableExperimentalFlowControlLayer, false, setupLog)
-	}
-
-	// Handle deprecated environment variable base Saturation Detector configuration
-
-	if _, ok := os.LookupEnv(EnvSdQueueDepthThreshold); ok {
-		logger.Info("Configuring Saturation Detector using environment variables is deprecated and will be removed in next version")
-		cfg.SaturationDetectorConfig.QueueDepthThreshold =
-			env.GetEnvInt(EnvSdQueueDepthThreshold, saturationdetector.DefaultQueueDepthThreshold, logger)
-		if cfg.SaturationDetectorConfig.QueueDepthThreshold <= 0 {
-			cfg.SaturationDetectorConfig.QueueDepthThreshold = saturationdetector.DefaultQueueDepthThreshold
-		}
-	}
-	if _, ok := os.LookupEnv(EnvSdKVCacheUtilThreshold); ok {
-		logger.Info("Configuring Saturation Detector using environment variables is deprecated and will be removed in next version")
-		cfg.SaturationDetectorConfig.KVCacheUtilThreshold = env.GetEnvFloat(EnvSdKVCacheUtilThreshold, saturationdetector.DefaultKVCacheUtilThreshold, logger)
-		if cfg.SaturationDetectorConfig.KVCacheUtilThreshold <= 0 || cfg.SaturationDetectorConfig.KVCacheUtilThreshold >= 1 {
-			cfg.SaturationDetectorConfig.KVCacheUtilThreshold = saturationdetector.DefaultKVCacheUtilThreshold
-		}
-	}
-	if _, ok := os.LookupEnv(EnvSdMetricsStalenessThreshold); ok {
-		logger.Info("Configuring Saturation Detector using environment variables is deprecated and will be removed in next version")
-		cfg.SaturationDetectorConfig.MetricsStalenessThreshold = env.GetEnvDuration(EnvSdMetricsStalenessThreshold, saturationdetector.DefaultMetricsStalenessThreshold, logger)
-		if cfg.SaturationDetectorConfig.MetricsStalenessThreshold <= 0 {
-			cfg.SaturationDetectorConfig.MetricsStalenessThreshold = saturationdetector.DefaultMetricsStalenessThreshold
-		}
 	}
 }
 

@@ -56,10 +56,10 @@ func NewIdealServer(cfg IdealServerConfig) *IdealServer {
 		panic("IdealServer: MaxConcurrency must be > 0")
 	}
 	return &IdealServer{
-		config:  cfg,
+		config:            cfg,
 		performanceFactor: 1.0,
 		pending:           list.New(),
-		running: make([]*Request, 0),
+		running:           make([]*Request, 0),
 	}
 }
 
@@ -134,9 +134,9 @@ func (s *IdealServer) GetState() SystemState {
 	defer s.mu.Unlock()
 	util := float64(len(s.running)) / float64(s.config.MaxConcurrency)
 	return SystemState{
-		QueueDepth:      s.pending.Len(),
-		RunningRequests: len(s.running),
-		Utilization:     min(util, 1.0),
+		QueueDepth:        s.pending.Len(),
+		RunningRequests:   len(s.running),
+		Utilization:       min(util, 1.0),
 		TrueBatchCapacity: s.config.MaxConcurrency,
 	}
 }

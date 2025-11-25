@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts/mocks"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
@@ -95,7 +94,7 @@ func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarn
 		MockRegistryShard:  &mocks.MockRegistryShard{},
 		clock:              testclock.NewFakeClock(time.Now()),
 		logger:             logr.Discard(),
-		saturationDetector: &mocks.MockSaturationDetector{},
+		saturationDetector: &mocks.MockSaturationDetector{ShouldDispatchV: true},
 		startSignal:        make(chan struct{}),
 		queues:             make(map[types.FlowKey]*mocks.MockManagedQueue),
 		priorityFlows:      make(map[int][]types.FlowKey),
@@ -748,9 +747,7 @@ func TestShardProcessor(t *testing.T) {
 							qLow := h.addQueue(keyLow)
 							require.NoError(t, qLow.Add(h.newTestItem("item-low", keyLow, testTTL)))
 
-							h.saturationDetector.IsSaturatedFunc = func(_ context.Context, _ []metrics.PodMetrics) bool {
-								return true
-							}
+							h.saturationDetector.ShouldDispatchV = false
 						},
 						expectDidDispatch: false,
 					},

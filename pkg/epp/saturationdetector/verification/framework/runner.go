@@ -50,7 +50,6 @@ func RunMatrix(t *testing.T, suite MatrixSuite) {
 				res := sim.GetResults()
 				score := Analyze(res, 0.85, 1.0, 0.05)
 
-
 				t.Log(score.String())
 				LogRequestSummary(t, res)
 				LogTimeline(t, res.Timeline, 25)

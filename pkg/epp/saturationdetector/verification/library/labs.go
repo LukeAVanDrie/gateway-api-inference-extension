@@ -37,7 +37,7 @@ const (
 // StandardLabs is the registry of available test environments.
 var StandardLabs = map[framework.LabID]framework.LabFactory{
 	// LabIdeal: buildLabIdeal,
-  LabHiFi: buildLabHiFi,
+	LabHiFi: buildLabHiFi,
 }
 
 func buildLabIdeal(traffic simulation.WorkloadProfile, overrides []framework.ConfigParam) simulation.Simulator {
@@ -75,7 +75,7 @@ func buildLab(traffic simulation.WorkloadProfile, overrides []framework.ConfigPa
 		WithQueueDepthAlpha(0.8).
 		WithProportionalGain(2.0).
 		WithSaturationSetpoint(1).
-    WithServiceRateWindow(30 * time.Second)
+		WithServiceRateWindow(30 * time.Second)
 
 	// B. Apply Overrides (The Test Requirements)
 	for _, p := range overrides {
@@ -108,10 +108,10 @@ func buildLab(traffic simulation.WorkloadProfile, overrides []framework.ConfigPa
 
 	// 4. Simulation Environment Configuration
 	simConfig := simulation.SimEnvConfig{
-		RecorderConfig: recorderConfig,
+		RecorderConfig:   recorderConfig,
 		ControllerConfig: ctrlConfig,
-		ScrapeInterval: 50 * time.Millisecond,
-		Backends:       nil, // Started empty
+		ScrapeInterval:   50 * time.Millisecond,
+		Backends:         nil, // Started empty
 	}
 
 	// 6. Assemble

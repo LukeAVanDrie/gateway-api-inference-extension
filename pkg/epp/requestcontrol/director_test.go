@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metadata"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+	rcplugins "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -894,19 +895,19 @@ const (
 
 type testResponseReceived struct {
 	tn                      plugins.TypedName
-	lastRespOnResponse      *Response
+	lastRespOnResponse      *rcplugins.Response
 	lastTargetPodOnResponse string
 }
 
 type testResponseStreaming struct {
 	tn                       plugins.TypedName
-	lastRespOnStreaming      *Response
+	lastRespOnStreaming      *rcplugins.Response
 	lastTargetPodOnStreaming string
 }
 
 type testResponseComplete struct {
 	tn                      plugins.TypedName
-	lastRespOnComplete      *Response
+	lastRespOnComplete      *rcplugins.Response
 	lastTargetPodOnComplete string
 }
 
@@ -940,17 +941,17 @@ func (p *testResponseComplete) TypedName() plugins.TypedName {
 	return p.tn
 }
 
-func (p *testResponseReceived) ResponseReceived(_ context.Context, _ *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (p *testResponseReceived) ResponseReceived(_ context.Context, _ *schedulingtypes.LLMRequest, response *rcplugins.Response, targetPod *backend.Pod) {
 	p.lastRespOnResponse = response
 	p.lastTargetPodOnResponse = targetPod.NamespacedName.String()
 }
 
-func (p *testResponseStreaming) ResponseStreaming(_ context.Context, _ *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (p *testResponseStreaming) ResponseStreaming(_ context.Context, _ *schedulingtypes.LLMRequest, response *rcplugins.Response, targetPod *backend.Pod) {
 	p.lastRespOnStreaming = response
 	p.lastTargetPodOnStreaming = targetPod.NamespacedName.String()
 }
 
-func (p *testResponseComplete) ResponseComplete(_ context.Context, _ *schedulingtypes.LLMRequest, response *Response, targetPod *backend.Pod) {
+func (p *testResponseComplete) ResponseComplete(_ context.Context, _ *schedulingtypes.LLMRequest, response *rcplugins.Response, targetPod *backend.Pod) {
 	p.lastRespOnComplete = response
 	p.lastTargetPodOnComplete = targetPod.NamespacedName.String()
 }

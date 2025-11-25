@@ -16,12 +16,6 @@ limitations under the License.
 
 package contracts
 
-import (
-	"context"
-
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
-)
-
 // SaturationDetector defines the contract for a component that provides real-time load signals to the
 // `controller.FlowController`.
 //
@@ -36,8 +30,5 @@ import (
 //
 // Implementations MUST be goroutine-safe.
 type SaturationDetector interface {
-	// IsSaturated returns true if the system's backend resources are considered saturated for a set of candidate pods.
-	// `controller.FlowController`'s dispatch workers call this method to decide whether to pause or throttle dispatch
-	// operations to prevent overwhelming the backends.
-	IsSaturated(ctx context.Context, candidatePods []metrics.PodMetrics) bool
+	ShouldDispatch(cost float64) bool
 }

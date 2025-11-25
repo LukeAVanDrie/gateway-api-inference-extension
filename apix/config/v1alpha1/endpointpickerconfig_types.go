@@ -46,18 +46,22 @@ type EndpointPickerConfig struct {
 	FeatureGates FeatureGates `json:"featureGates,omitempty"`
 
 	// +optional
-	// SaturationDetector when present specifies the configuration of the
-	// Saturation detector. If not present, default values are used.
-	SaturationDetector *SaturationDetector `json:"saturationDetector,omitempty"`
+	// SaturationSignalRecorder configures the sensor resolution of the system.
+	SaturationSignalRecorder *SaturationSignalRecorder `json:"saturationSignalRecorder,omitempty"`
+
+	// +optional
+	// SaturationController configures the saturation control loop.
+	SaturationController *SaturationController `json:"saturationDetector,omitempty"`
 }
 
 func (cfg EndpointPickerConfig) String() string {
 	return fmt.Sprintf(
-		"{Plugins: %v, SchedulingProfiles: %v, FeatureGates: %v, SaturationDetector: %v}",
+		"{Plugins: %v, SchedulingProfiles: %v, FeatureGates: %v, SaturationSignalRecorder: %v, SaturationController: %v}",
 		cfg.Plugins,
 		cfg.SchedulingProfiles,
 		cfg.FeatureGates,
-		cfg.SaturationDetector,
+		cfg.SaturationSignalRecorder,
+		cfg.SaturationController,
 	)
 }
 
@@ -150,44 +154,103 @@ func (fg FeatureGates) String() string {
 	return "{" + result + "}"
 }
 
-// SaturationDetector
-type SaturationDetector struct {
+// SaturationSignalRecorder configures the system's fundamental sensor resolution.
+type SaturationSignalRecorder struct {
 	// +optional
-	// QueueDepthThreshold defines the backend waiting queue size above which a
-	// pod is considered to have insufficient capacity for new requests.
-	QueueDepthThreshold int `json:"queueDepthThreshold,omitempty"`
+	// TickInterval defines the sampling resolution (Default: 50ms).
+	TickInterval *metav1.Duration `json:"tickInterval,omitempty"`
 
 	// +optional
-	// KVCacheUtilThreshold defines the KV cache utilization (0.0 to 1.0) above
-	// which a pod is considered to have insufficient capacity.
-	KVCacheUtilThreshold float64 `json:"kvCacheUtilThreshold,omitempty"`
-
-	// +optional
-	// MetricsStalenessThreshold defines how old a pod's metrics can be.
-	// If a pod's metrics are older than this, it might be excluded from
-	// "good capacity" considerations or treated as having no capacity for
-	// safety.
-	MetricsStalenessThreshold metav1.Duration `json:"metricsStalenessThreshold,omitempty"`
+	// MaxExpectedCompletionsQPS tunes the internal buffer sizing (Default: 1000).
+	MaxExpectedCompletionsQPS *int `json:"maxExpectedCompletionsQPS,omitempty"`
 }
 
-func (sd *SaturationDetector) String() string {
-	result := ""
-	if sd != nil {
-		if sd.QueueDepthThreshold != 0 {
-			result += fmt.Sprintf("QueueDepthThreshold: %d", sd.QueueDepthThreshold)
-		}
-		if sd.KVCacheUtilThreshold != 0.0 {
-			if len(result) != 0 {
-				result += ", "
-			}
-			result += fmt.Sprintf("KVCacheUtilThreshold: %g", sd.KVCacheUtilThreshold)
-		}
-		if sd.MetricsStalenessThreshold.Duration != 0.0 {
-			if len(result) != 0 {
-				result += ", "
-			}
-			result += fmt.Sprintf("MetricsStalenessThreshold: %s", sd.MetricsStalenessThreshold)
-		}
+func (ssr *SaturationSignalRecorder) String() string {
+	if ssr == nil {
+		return "{}"
 	}
-	return "{" + result + "}"
+	return fmt.Sprintf("{TickInterval: %v, MaxExpectedCompletionsQPS: %v}", ssr.TickInterval, ssr.MaxExpectedCompletionsQPS)
+}
+
+// SaturationController configures the SaturationController's physics and logic.
+type SaturationController struct {
+	// --- Control Loop Parameters ---
+
+	// +optional
+	SaturationSetpoint *float64 `json:"saturationSetpoint,omitempty"`
+
+	// +optional
+	SaturationHeadroom *float64 `json:"saturationHeadroom,omitempty"`
+
+	// +optional
+	ProportionalGain *float64 `json:"proportionalGain,omitempty"`
+
+	// +optional
+	MinDispatchRate *float64 `json:"minDispatchRate,omitempty"`
+
+	// +optional
+	// MaxQueueLatency is the operational contract (SLO) for the queue.
+	MaxQueueLatency *metav1.Duration `json:"maxQueueLatency,omitempty"`
+
+	// --- Estimator Smoothing ---
+
+	// +optional
+	EffectiveBatchAlpha *float64 `json:"effectiveBatchAlpha,omitempty"`
+
+	// +optional
+	QueueDepthAlpha *float64 `json:"queueDepthAlpha,omitempty"`
+
+	// +optional
+	ServiceRateWindow *metav1.Duration `json:"serviceRateWindow,omitempty"`
+
+	// --- Estimator Memory ---
+
+	// +optional
+	PeakInflightConcurrencyWindow *metav1.Duration `json:"peakInflightConcurrencyWindow,omitempty"`
+
+	// +optional
+	PeakInflightConcurrencySamples *int `json:"peakInflightConcurrencySamples,omitempty"`
+
+	// +optional
+	KVCacheWindow *metav1.Duration `json:"kvCacheWindow,omitempty"`
+
+	// +optional
+	KVCacheSamples *int `json:"kvCacheSamples,omitempty"`
+
+	// --- Lifecycle & Trust ---
+
+	// +optional
+	MaturityQuorumPercentage *float64 `json:"maturityQuorumPercentage,omitempty"`
+
+	// +optional
+	DormantTimeout *metav1.Duration `json:"dormantTimeout,omitempty"`
+
+	// +optional
+	MetricsStalenessThreshold *metav1.Duration `json:"metricsStalenessThreshold,omitempty"`
+
+	// --- Statistical Confidence ---
+
+	// +optional
+	MinSamplesForEffectiveBatchMaturity *uint64 `json:"minSamplesForEffectiveBatchMaturity,omitempty"`
+
+	// +optional
+	MinEffectiveCountForServiceRateMaturity *float64 `json:"minEffectiveCountForServiceRateMaturity,omitempty"`
+
+	// --- Sampling Physics ---
+
+	// +optional
+	MinBatchSampleInterval *metav1.Duration `json:"minBatchSampleInterval,omitempty"`
+
+	// +optional
+	// SignalRecorderPluginName is the name of the recorder plugin to wire into.
+	// Defaults to "SaturationSignalRecorder".
+	SignalRecorderPluginName string `json:"signalRecorderPluginName,omitempty"`
+}
+
+func (sd *SaturationController) String() string {
+	if sd == nil {
+		return "{}"
+	}
+	// Simplified string representation
+	return fmt.Sprintf("{Setpoint: %v, MaxQueueLatency: %v}", sd.SaturationSetpoint, sd.MaxQueueLatency)
 }

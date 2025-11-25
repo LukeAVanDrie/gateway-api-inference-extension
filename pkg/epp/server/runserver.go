@@ -57,7 +57,7 @@ type ExtProcServerRunner struct {
 	RefreshPrometheusMetricsInterval time.Duration
 	MetricsStalenessThreshold        time.Duration
 	Director                         *requestcontrol.Director
-	SaturationDetector               *saturationdetector.Detector
+	SaturationController             *saturationdetector.SaturationController
 	UseExperimentalDatalayerV2       bool // Pluggable data layer feature flag
 
 	// This should only be used in tests. We won't need this once we do not inject metrics in the tests.

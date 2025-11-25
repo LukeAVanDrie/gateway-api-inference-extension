@@ -29,16 +29,16 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
 )
 
-var _ requestcontrol.PreRequest = &SLOAwareRouter{}
-var _ requestcontrol.ResponseReceived = &SLOAwareRouter{}
-var _ requestcontrol.ResponseStreaming = &SLOAwareRouter{}
-var _ requestcontrol.ResponseComplete = &SLOAwareRouter{}
+var _ plugins.PreRequest = &SLOAwareRouter{}
+var _ plugins.ResponseReceived = &SLOAwareRouter{}
+var _ plugins.ResponseStreaming = &SLOAwareRouter{}
+var _ plugins.ResponseComplete = &SLOAwareRouter{}
 
 type sloRequestContext struct {
 	schedulingRequest         schedulingtypes.LLMRequest
@@ -155,7 +155,7 @@ func (t *SLOAwareRouter) PreRequest(ctx context.Context, request *schedulingtype
 	t.setSLOContextForRequest(request, sloCtx)
 }
 
-func (t *SLOAwareRouter) ResponseReceived(ctx context.Context, request *schedulingtypes.LLMRequest, response *requestcontrol.Response, targetPod *backend.Pod) {
+func (t *SLOAwareRouter) ResponseReceived(ctx context.Context, request *schedulingtypes.LLMRequest, response *plugins.Response, targetPod *backend.Pod) {
 	logger := log.FromContext(ctx)
 	if !t.checkPredictor(logger, targetPod) {
 		return
@@ -175,7 +175,7 @@ func (t *SLOAwareRouter) ResponseReceived(ctx context.Context, request *scheduli
 
 }
 
-func (t *SLOAwareRouter) ResponseStreaming(ctx context.Context, request *schedulingtypes.LLMRequest, response *requestcontrol.Response, pod *backend.Pod) {
+func (t *SLOAwareRouter) ResponseStreaming(ctx context.Context, request *schedulingtypes.LLMRequest, response *plugins.Response, pod *backend.Pod) {
 	logger := log.FromContext(ctx)
 	if !t.checkPredictor(logger, pod) || response.EndOfStream {
 		return
@@ -197,7 +197,7 @@ func (t *SLOAwareRouter) ResponseStreaming(ctx context.Context, request *schedul
 
 }
 
-func (t *SLOAwareRouter) ResponseComplete(ctx context.Context, request *schedulingtypes.LLMRequest, response *requestcontrol.Response, pod *backend.Pod) {
+func (t *SLOAwareRouter) ResponseComplete(ctx context.Context, request *schedulingtypes.LLMRequest, response *plugins.Response, pod *backend.Pod) {
 	logger := log.FromContext(ctx)
 	targetPod := pod
 	if !t.checkPredictor(logger, targetPod) {

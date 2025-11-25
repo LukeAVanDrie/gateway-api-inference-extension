@@ -17,8 +17,8 @@ limitations under the License.
 package loader
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/queuemonitor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework"
@@ -53,24 +53,54 @@ func setDefaultsPhaseOne(cfg *configapi.EndpointPickerConfig) {
 		}
 	}
 
+	hasQueueMonitor := false
+	hasRecorder := false
+	hasController := false
+
+	for _, p := range cfg.Plugins {
+		if p.Type == queuemonitor.QueueMonitorType {
+			hasQueueMonitor = true
+		}
+		if p.Type == saturationdetector.SaturationSignalRecorderType {
+			hasRecorder = true
+		}
+		if p.Type == saturationdetector.SaturationControllerType {
+			hasController = true
+		}
+	}
+
+	var orderedPlugins []configapi.PluginSpec
+
+	// Level 0: Queue Monitor
+	if !hasQueueMonitor {
+		orderedPlugins = append(orderedPlugins, configapi.PluginSpec{
+			Name: queuemonitor.QueueMonitorType,
+			Type: queuemonitor.QueueMonitorType,
+		})
+	}
+
+	// Level 1: Recorder
+	if !hasRecorder {
+		orderedPlugins = append(orderedPlugins, configapi.PluginSpec{
+			Name: saturationdetector.SaturationSignalRecorderType,
+			Type: saturationdetector.SaturationSignalRecorderType,
+		})
+	}
+
+	// Level 2: Controller
+	if !hasController {
+		orderedPlugins = append(orderedPlugins, configapi.PluginSpec{
+			Name: saturationdetector.SaturationControllerType,
+			Type: saturationdetector.SaturationControllerType,
+		})
+	}
+
+	orderedPlugins = append(orderedPlugins, cfg.Plugins...)
+	cfg.Plugins = orderedPlugins
+
 	// If no feature gates were specified, provide a default FeatureGates struct
 	if cfg.FeatureGates == nil {
 		cfg.FeatureGates = configapi.FeatureGates{}
-	}
-
-	// If the SaturationDetector configuration wasn't specified setup a default one
-	if cfg.SaturationDetector == nil {
-		cfg.SaturationDetector = &configapi.SaturationDetector{}
-	}
-	if cfg.SaturationDetector.QueueDepthThreshold == 0 {
-		cfg.SaturationDetector.QueueDepthThreshold = saturationdetector.DefaultQueueDepthThreshold
-	}
-	if cfg.SaturationDetector.KVCacheUtilThreshold == 0.0 {
-		cfg.SaturationDetector.KVCacheUtilThreshold = saturationdetector.DefaultKVCacheUtilThreshold
-	}
-	if cfg.SaturationDetector.MetricsStalenessThreshold.Duration == 0.0 {
-		cfg.SaturationDetector.MetricsStalenessThreshold =
-			metav1.Duration{Duration: saturationdetector.DefaultMetricsStalenessThreshold}
 	}
 }
 
@@ -83,12 +113,6 @@ func setDefaultsPhaseOne(cfg *configapi.EndpointPickerConfig) {
 //  4. Adds a picker (MaxScorePicker) to all SchedulingProfiles that don't have a picker
 func setDefaultsPhaseTwo(cfg *configapi.EndpointPickerConfig, handle plugins.Handle) {
 	allPlugins := handle.GetAllPluginsWithNames()
-
-	saturationSignalRecorder := saturationdetector.NewSaturationSignalRecorder(&saturationdetector.SignalRecorderConfig{})
-	saturationController := saturationdetector.NewSaturationController(
-		&saturationdetector.ControllerConfig{},
-		saturationSignalRecorder,
-	)
 
 	// If No SchedulerProfiles were specified in the confguration,
 	// create one named default with references to all of the scheduling

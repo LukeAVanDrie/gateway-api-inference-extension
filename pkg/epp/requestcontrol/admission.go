@@ -25,6 +25,7 @@ import (
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
@@ -56,7 +57,7 @@ type AdmissionController interface {
 
 // saturationDetector defines the minimal interface required for checking if the backend pool is saturated.
 type saturationDetector interface {
-	IsSaturated(ctx context.Context, candidatePods []backendmetrics.PodMetrics) bool
+	Introspect() saturationdetector.ControllerState
 }
 
 // flowController defines the minimal interface required by FlowControlAdmissionController for enqueuing requests and
@@ -71,12 +72,12 @@ func rejectIfSheddableAndSaturated(
 	ctx context.Context,
 	sd saturationDetector,
 	reqCtx *handlers.RequestContext,
-	candidatePods []backendmetrics.PodMetrics,
+	_ []backendmetrics.PodMetrics,
 	priority int,
 ) error {
 	if requtil.IsSheddable(priority) {
 		logger := log.FromContext(ctx)
-		if sd.IsSaturated(ctx, candidatePods) {
+		if sd.Introspect().AvgSaturation > 1.0 {
 			logger.V(logutil.TRACE).Info("Request rejected: system saturated and request is sheddable",
 				"requestID", reqCtx.SchedulingRequest.RequestId)
 			return errutil.Error{

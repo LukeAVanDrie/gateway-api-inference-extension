@@ -257,7 +257,7 @@ func calculateStartupMetrics(timeline []simulation.Snapshot) StartupMetrics {
 	}
 	start := timeline[0].Timestamp
 	var timeToReg time.Duration = -1
-	var peakDisc float64 = 0.0
+	var peakDisc = 0.0
 
 	for _, snap := range timeline {
 		// Capture Peak Discovery (L_peak)

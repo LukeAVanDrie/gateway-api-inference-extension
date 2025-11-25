@@ -79,15 +79,13 @@ func LoadConfigPhaseTwo(rawConfig *configapi.EndpointPickerConfig, handle plugin
 		return nil, fmt.Errorf("failed to validate scheduling profiles - %w", err)
 	}
 
-	config := &config.Config{}
+	cfg := &config.Config{Handle: handle}
 
-	config.SchedulerConfig, err = loadSchedulerConfig(rawConfig.SchedulingProfiles, handle)
+	cfg.SchedulerConfig, err = loadSchedulerConfig(rawConfig.SchedulingProfiles, handle)
 	if err != nil {
 		return nil, err
 	}
-	config.SaturationDetectorConfig = loadSaturationDetectorConfig(rawConfig.SaturationDetector)
-
-	return config, nil
+	return cfg, nil
 }
 
 func loadRawConfig(configBytes []byte) (*configapi.EndpointPickerConfig, error) {
@@ -103,6 +101,17 @@ func loadRawConfig(configBytes []byte) (*configapi.EndpointPickerConfig, error) 
 
 func loadSchedulerConfig(configProfiles []configapi.SchedulingProfile, handle plugins.Handle) (*scheduling.SchedulerConfig, error) {
 	profiles := map[string]*framework.SchedulerProfile{}
+
+	// Resolve the Saturation Controller to wrap pickers.
+	// We look up by Type because the default name matches the type, and we expect a Singleton.
+	ctrl, err := plugins.PluginByType[*saturationdetector.SaturationController](
+		handle,
+		saturationdetector.SaturationControllerType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("SaturationController plugin not found - %w", err)
+	}
+
 	for _, namedProfile := range configProfiles {
 		profile := framework.NewSchedulerProfile()
 		for _, plugin := range namedProfile.Plugins {
@@ -111,7 +120,7 @@ func loadSchedulerConfig(configProfiles []configapi.SchedulingProfile, handle pl
 				referencedPlugin = framework.NewWeightedScorer(scorer, *plugin.Weight)
 			}
 			if picker, ok := referencedPlugin.(framework.Picker); ok {
-				referencedPlugin = saturationdetector.NewControlAwarePicker(picker)
+				referencedPlugin = saturationdetector.NewProbePicker(ctrl, picker)
 			}
 			if err := profile.AddPlugins(referencedPlugin); err != nil {
 				return nil, fmt.Errorf("failed to load scheduler config - %w", err)
@@ -152,25 +161,6 @@ func loadFeatureConfig(featureGates configapi.FeatureGates) map[string]bool {
 	}
 
 	return featureConfig
-}
-
-func loadSaturationDetectorConfig(sd *configapi.SaturationDetector) *saturationdetector.Config {
-	sdConfig := saturationdetector.Config{}
-
-	sdConfig.QueueDepthThreshold = sd.QueueDepthThreshold
-	if sdConfig.QueueDepthThreshold <= 0 {
-		sdConfig.QueueDepthThreshold = saturationdetector.DefaultQueueDepthThreshold
-	}
-	sdConfig.KVCacheUtilThreshold = sd.KVCacheUtilThreshold
-	if sdConfig.KVCacheUtilThreshold <= 0.0 || sdConfig.KVCacheUtilThreshold >= 1.0 {
-		sdConfig.KVCacheUtilThreshold = saturationdetector.DefaultKVCacheUtilThreshold
-	}
-	sdConfig.MetricsStalenessThreshold = sd.MetricsStalenessThreshold.Duration
-	if sdConfig.MetricsStalenessThreshold <= 0.0 {
-		sdConfig.MetricsStalenessThreshold = saturationdetector.DefaultMetricsStalenessThreshold
-	}
-
-	return &sdConfig
 }
 
 func instantiatePlugins(configuredPlugins []configapi.PluginSpec, handle plugins.Handle) error {

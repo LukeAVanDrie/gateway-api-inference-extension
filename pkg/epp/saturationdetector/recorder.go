@@ -19,14 +19,16 @@ package saturationdetector
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"k8s.io/utils/clock"
+	configapi "sigs.k8s.io/gateway-api-inference-extension/apix/config/v1alpha1"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
+	rcplugins "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 )
 
@@ -40,19 +42,24 @@ const SaturationSignalRecorderType = "SaturationSignalRecorder"
 const completionChannelSafetyFactor = 4.0
 
 func init() {
-	plugins.RegisterWithMetadata(SaturationSignalRecorderType, plugins.PluginRegistration{
-		Factory:   SaturationSignalRecorderFactory,
-		Lifecycle: plugins.LifecycleSingleton,
-	})
+	plugins.Register(SaturationSignalRecorderType, SaturationSignalRecorderFactory)
 }
 
 // SaturationSignalRecorderFactory defines the factory function for SaturationSignalRecorder.
-func SaturationSignalRecorderFactory(name string, _ json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
-	config := &SignalRecorderConfig{} // TODO: extract from JSON params.
+func SaturationSignalRecorderFactory(name string, params json.RawMessage, handle plugins.Handle) (plugins.Plugin, error) {
+	apixConfig := &configapi.SaturationSignalRecorder{}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, apixConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal parameters for %s: %w", name, err)
+		}
+	}
+
+	config := LoadSignalRecorderConfigFromAPIX(apixConfig)
 	config.setDefaults()
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
+
 	return NewSaturationSignalRecorder(config, WithSaturationSignalRecorderName(name)), nil
 }
 
@@ -155,7 +162,7 @@ func (r *SaturationSignalRecorder) PreRequest(
 func (r *SaturationSignalRecorder) ResponseComplete(
 	_ context.Context,
 	_ *types.LLMRequest,
-	_ *requestcontrol.Response,
+	_ *rcplugins.Response,
 	targetPod *backend.Pod,
 ) {
 	podID := targetPod.NamespacedName.String()

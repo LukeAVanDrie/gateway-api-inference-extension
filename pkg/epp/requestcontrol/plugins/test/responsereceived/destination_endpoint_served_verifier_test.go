@@ -22,19 +22,19 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metadata"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins/test"
 )
 
 func TestDestinationEndpointServedVerifier_ResponseReceived(t *testing.T) {
 	testCases := []struct {
 		name                string
-		response            *requestcontrol.Response
+		response            *plugins.Response
 		expectedHeaderValue string
 	}{
 		{
 			name: "success - endpoint is correctly reported",
-			response: &requestcontrol.Response{
+			response: &plugins.Response{
 				Headers: make(map[string]string),
 				ReqMetadata: map[string]any{
 					metadata.DestinationEndpointNamespace: map[string]any{
@@ -46,7 +46,7 @@ func TestDestinationEndpointServedVerifier_ResponseReceived(t *testing.T) {
 		},
 		{
 			name: "failure - missing lb metadata",
-			response: &requestcontrol.Response{
+			response: &plugins.Response{
 				Headers:     make(map[string]string),
 				ReqMetadata: map[string]any{},
 			},
@@ -54,7 +54,7 @@ func TestDestinationEndpointServedVerifier_ResponseReceived(t *testing.T) {
 		},
 		{
 			name: "failure - missing served endpoint key",
-			response: &requestcontrol.Response{
+			response: &plugins.Response{
 				Headers: make(map[string]string),
 				ReqMetadata: map[string]any{
 					metadata.DestinationEndpointNamespace: map[string]any{
@@ -66,7 +66,7 @@ func TestDestinationEndpointServedVerifier_ResponseReceived(t *testing.T) {
 		},
 		{
 			name: "failure - nil metadata",
-			response: &requestcontrol.Response{
+			response: &plugins.Response{
 				Headers:     make(map[string]string),
 				ReqMetadata: nil,
 			},

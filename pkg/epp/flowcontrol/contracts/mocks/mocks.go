@@ -30,11 +30,9 @@ limitations under the License.
 package mocks
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
@@ -113,14 +111,11 @@ func (m *MockRegistryShard) Stats() contracts.ShardStats {
 
 // MockSaturationDetector is a simple "stub-style" mock for testing.
 type MockSaturationDetector struct {
-	IsSaturatedFunc func(ctx context.Context, candidatePods []metrics.PodMetrics) bool
+	ShouldDispatchV bool
 }
 
-func (m *MockSaturationDetector) IsSaturated(ctx context.Context, candidatePods []metrics.PodMetrics) bool {
-	if m.IsSaturatedFunc != nil {
-		return m.IsSaturatedFunc(ctx, candidatePods)
-	}
-	return false
+func (m *MockSaturationDetector) ShouldDispatch(_ float64) bool {
+	return m.ShouldDispatchV
 }
 
 // MockManagedQueue is a high-fidelity, thread-safe mock of the `contracts.ManagedQueue` interface, designed

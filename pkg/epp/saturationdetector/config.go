@@ -17,6 +17,7 @@ limitations under the License.
 package saturationdetector
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -357,10 +358,10 @@ func (b *ControllerConfigBuilder) WithSignalRecorderPluginName(name string) *Con
 // validate checks the SignalRecorderConfig for logical consistency.
 func (c *SignalRecorderConfig) validate() error {
 	if c.MaxExpectedCompletionsQPS <= 0 {
-		return fmt.Errorf("MaxExpectedCompletionsQPS must be a positive integer")
+		return errors.New("MaxExpectedCompletionsQPS must be a positive integer")
 	}
 	if c.TickInterval <= 0 {
-		return fmt.Errorf("TickInterval must be a positive duration")
+		return errors.New("TickInterval must be a positive duration")
 	}
 	return nil
 }
@@ -368,61 +369,61 @@ func (c *SignalRecorderConfig) validate() error {
 // validate checks the ControllerConfig for logical consistency.
 func (c *ControllerConfig) validate() error {
 	if c.SaturationSetpoint <= 0 || c.SaturationSetpoint > 1.0 {
-		return fmt.Errorf("SaturationSetpoint must be in the range (0, 1]")
+		return errors.New("SaturationSetpoint must be in the range (0, 1]")
 	}
 	if c.SaturationHeadroom <= 0 || c.SaturationHeadroom > 1.0 {
-		return fmt.Errorf("SaturationHeadroom must be in the range (0, 1]")
+		return errors.New("SaturationHeadroom must be in the range (0, 1]")
 	}
 	if c.MinDispatchRate <= 0 {
-		return fmt.Errorf("MinDispatchRate must be a positive value")
+		return errors.New("MinDispatchRate must be a positive value")
 	}
 	if c.ProportionalGain <= 0 {
-		return fmt.Errorf("ProportionalGain must be a positive value")
+		return errors.New("ProportionalGain must be a positive value")
 	}
 	if c.MaxQueueLatency <= 0 {
-		return fmt.Errorf("MaxQueueLatency must be a positive duration")
+		return errors.New("MaxQueueLatency must be a positive duration")
 	}
 	if c.MaturityQuorumPercentage <= 0 || c.MaturityQuorumPercentage > 1.0 {
-		return fmt.Errorf("MaturityQuorumPercentage must be in the range (0, 1]")
+		return errors.New("MaturityQuorumPercentage must be in the range (0, 1]")
 	}
 	if c.DormantTimeout <= 0 {
-		return fmt.Errorf("DormantTimeout must be a positive duration")
+		return errors.New("DormantTimeout must be a positive duration")
 	}
 	if c.MetricsStalenessThreshold <= 0 {
-		return fmt.Errorf("MetricsStalenessThreshold must be a positive duration")
+		return errors.New("MetricsStalenessThreshold must be a positive duration")
 	}
 	if c.MinSamplesForEffectiveBatchMaturity <= 0 {
-		return fmt.Errorf("MinSamplesForEffectiveBatchMaturity must be a positive integer")
+		return errors.New("MinSamplesForEffectiveBatchMaturity must be a positive integer")
 	}
 	if c.MinEffectiveCountForServiceRateMaturity <= 0 {
-		return fmt.Errorf("MinEffectiveCountForServiceRateMaturity must be a positive value")
+		return errors.New("MinEffectiveCountForServiceRateMaturity must be a positive value")
 	}
 	if c.PeakInflightConcurrencyWindow <= 0 {
-		return fmt.Errorf("PeakInflightConcurrencyWindow must be a positive duration")
+		return errors.New("PeakInflightConcurrencyWindow must be a positive duration")
 	}
 	if c.PeakInflightConcurrencySamples <= 0 {
-		return fmt.Errorf("PeakInflightConcurrencySamples must be a positive integer")
+		return errors.New("PeakInflightConcurrencySamples must be a positive integer")
 	}
 	if c.KVCacheWindow <= 0 {
-		return fmt.Errorf("KVCacheWindow must be a positive duration")
+		return errors.New("KVCacheWindow must be a positive duration")
 	}
 	if c.KVCacheSamples <= 0 {
-		return fmt.Errorf("KVCacheSamples must be a positive integer")
+		return errors.New("KVCacheSamples must be a positive integer")
 	}
 	if c.EffectiveBatchAlpha <= 0 || c.EffectiveBatchAlpha > 1.0 {
-		return fmt.Errorf("EffectiveBatchAlpha must be in the range (0, 1]")
+		return errors.New("EffectiveBatchAlpha must be in the range (0, 1]")
 	}
 	if c.QueueDepthAlpha <= 0 || c.QueueDepthAlpha > 1.0 {
-		return fmt.Errorf("QueueDepthAlpha must be in the range (0, 1]")
+		return errors.New("QueueDepthAlpha must be in the range (0, 1]")
 	}
 	if c.ServiceRateWindow <= 0 {
-		return fmt.Errorf("ServiceRateWindow must be a positive duration")
+		return errors.New("ServiceRateWindow must be a positive duration")
 	}
 	if c.MinBatchSampleInterval <= 0 {
-		return fmt.Errorf("MinBatchSampleInterval must be a positive duration")
+		return errors.New("MinBatchSampleInterval must be a positive duration")
 	}
 	if c.SignalRecorderPluginName == "" {
-		return fmt.Errorf("SignalRecorderPluginName is required")
+		return errors.New("SignalRecorderPluginName is required")
 	}
 	return nil
 }

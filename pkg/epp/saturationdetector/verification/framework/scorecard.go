@@ -68,7 +68,7 @@ func (s Scorecard) String() string {
 	fmt.Fprintf(&sb, "  P90:                %v\n", s.Latency.P90)
 	fmt.Fprintf(&sb, "  P99:                %v\n", s.Latency.P99)
 	fmt.Fprintf(&sb, "  Max:                %v\n", s.Latency.Max)
-	fmt.Fprintf(&sb, "  Mean:               %v\n", s.Latency.MeanDispatchWait + s.Latency.MeanBackendService)
+	fmt.Fprintf(&sb, "  Mean:               %v\n", s.Latency.MeanDispatchWait+s.Latency.MeanBackendService)
 	fmt.Fprintf(&sb, "  Mean Dispatch Wait: %v (Flow Control Buffer)\n", s.Latency.MeanDispatchWait)
 	fmt.Fprintf(&sb, "  Mean Service Time:  %v (Backend Queue+Prefill+Decode)\n", s.Latency.MeanBackendService)
 
@@ -237,4 +237,3 @@ type EstimatorMetrics struct {
 	// Target: < ServiceWindow/2. Checks if EWMAs are too slow.
 	RateEstimatorLag time.Duration
 }
-

@@ -91,7 +91,7 @@ func TestNewPacer(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fakeClock := testingclock.NewFakeClock(time.Now())
@@ -195,7 +195,7 @@ func TestPacer_Allow(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fakeClock := testingclock.NewFakeClock(time.Now())
@@ -282,7 +282,7 @@ func TestPacer_SetRate(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			fakeClock := testingclock.NewFakeClock(time.Now())

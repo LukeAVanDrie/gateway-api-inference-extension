@@ -21,11 +21,12 @@ import (
 	"errors"
 	"time"
 
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol/plugins"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/types"
 )
 
 // prepareDataPluginsWithTimeout executes the PrepareRequestData plugins with retries and timeout.
-func prepareDataPluginsWithTimeout(timeout time.Duration, plugins []PrepareDataPlugin,
+func prepareDataPluginsWithTimeout(timeout time.Duration, plugins []plugins.PrepareDataPlugin,
 	ctx context.Context, request *schedulingtypes.LLMRequest, pods []schedulingtypes.Pod) error {
 	errCh := make(chan error, 1)
 	// Execute plugins sequentially in a separate goroutine

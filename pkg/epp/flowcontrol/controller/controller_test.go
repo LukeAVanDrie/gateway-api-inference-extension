@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/internal"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	frameworkmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/queuemonitor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	typesmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
 )
@@ -113,7 +114,7 @@ func newUnitHarness(t *testing.T, ctx context.Context, cfg Config, registry *moc
 		withClock(mockClock),
 		withShardProcessorFactory(mockProcessorFactory.new),
 	}
-	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, logr.Discard(), opts...)
+	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, queuemonitor.NewQueueMonitor(""), logr.Discard(), opts...)
 	require.NoError(t, err, "failed to create FlowController for unit test harness")
 
 	h := &testHarness{
@@ -144,7 +145,7 @@ func newIntegrationHarness(t *testing.T, ctx context.Context, cfg Config, regist
 		withRegistryClient(registry),
 		withClock(mockClock),
 	}
-	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, logr.Discard(), opts...)
+	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, queuemonitor.NewQueueMonitor(""), logr.Discard(), opts...)
 	require.NoError(t, err, "failed to create FlowController for integration test harness")
 
 	h := &testHarness{

@@ -171,10 +171,6 @@ func (sp *ShardProcessor) Run(ctx context.Context) {
 	dispatchTicker := sp.clock.NewTicker(time.Millisecond)
 	defer dispatchTicker.Stop()
 
-	// Create a ticker for periodic dispatch attempts to avoid tight loops
-	dispatchTicker := sp.clock.NewTicker(time.Millisecond) // we may adjust interval as needed
-	defer dispatchTicker.Stop()
-
 	// This is the main worker loop. It continuously processes incoming requests and dispatches queued requests until the
 	// context is cancelled. The `select` statement has three cases:
 	//
@@ -294,7 +290,7 @@ func (sp *ShardProcessor) hasCapacity(priority int, itemByteSize uint64) bool {
 // However, if a selected item is saturated (cannot be scheduled), the cycle stops immediately. This enforces HoL
 // blocking to respect the policy's decision and prevent priority inversion, where dispatching lower-priority work might
 // exacerbate the saturation affecting the high-priority item.
-func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
+func (sp *ShardProcessor) dispatchCycle(_ context.Context) bool {
 	for _, priority := range sp.shard.AllOrderedPriorityLevels() {
 		originalBand, err := sp.shard.PriorityBandAccessor(priority)
 		if err != nil {
@@ -314,8 +310,7 @@ func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
 
 		// --- Viability Check (Saturation/HoL Blocking) ---
 		req := item.OriginalRequest()
-		candidatePods := req.CandidatePodsForScheduling()
-		if sp.saturationDetector.IsSaturated(ctx, candidatePods) {
+		if !sp.saturationDetector.ShouldDispatch(1.0) {
 			sp.logger.V(logutil.DEBUG).Info("Policy's chosen item is saturated; enforcing HoL blocking.",
 				"flowKey", req.FlowKey(), "reqID", req.ID(), "priorityName", originalBand.PriorityName())
 			sp.saturated.Store(true)
