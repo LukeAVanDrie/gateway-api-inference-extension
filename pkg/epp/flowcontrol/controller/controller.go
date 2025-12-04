@@ -37,6 +37,8 @@ import (
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/internal"
+	satctrl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationcontroller/framework"
+
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
@@ -59,7 +61,7 @@ type shardProcessor interface {
 type shardProcessorFactory func(
 	ctx context.Context,
 	shard contracts.RegistryShard,
-	saturationDetector contracts.SaturationDetector,
+	saturationDetector satctrl.SaturationController,
 	clock clock.WithTicker,
 	cleanupSweepInterval time.Duration,
 	enqueueChannelBufferSize int,
@@ -94,7 +96,7 @@ type FlowController struct {
 
 	config                Config
 	registry              registryClient
-	saturationDetector    contracts.SaturationDetector
+	saturationController  satctrl.SaturationController
 	clock                 clock.WithTicker
 	logger                logr.Logger
 	shardProcessorFactory shardProcessorFactory
@@ -125,23 +127,23 @@ func NewFlowController(
 	ctx context.Context,
 	config Config,
 	registry contracts.FlowRegistry,
-	sd contracts.SaturationDetector,
+	sc satctrl.SaturationController,
 	logger logr.Logger,
 	opts ...flowControllerOption,
 ) (*FlowController, error) {
 	fc := &FlowController{
-		config:             config,
-		registry:           registry,
-		saturationDetector: sd,
-		clock:              clock.RealClock{},
-		logger:             logger.WithName("flow-controller"),
-		parentCtx:          ctx,
+		config:               config,
+		registry:             registry,
+		saturationController: sc,
+		clock:                clock.RealClock{},
+		logger:               logger.WithName("flow-controller"),
+		parentCtx:            ctx,
 	}
 
 	fc.shardProcessorFactory = func(
 		ctx context.Context,
 		shard contracts.RegistryShard,
-		saturationDetector contracts.SaturationDetector,
+		saturationController satctrl.SaturationController,
 		clock clock.WithTicker,
 		cleanupSweepInterval time.Duration,
 		enqueueChannelBufferSize int,
@@ -150,7 +152,7 @@ func NewFlowController(
 		return internal.NewShardProcessor(
 			ctx,
 			shard,
-			saturationDetector,
+			saturationController,
 			clock,
 			cleanupSweepInterval,
 			enqueueChannelBufferSize,
@@ -447,7 +449,7 @@ func (fc *FlowController) getOrStartWorker(shard contracts.RegistryShard) *manag
 	processor := fc.shardProcessorFactory(
 		processorCtx,
 		shard,
-		fc.saturationDetector,
+		fc.saturationController,
 		fc.clock,
 		fc.config.ExpiryCleanupInterval,
 		fc.config.EnqueueChannelBufferSize,

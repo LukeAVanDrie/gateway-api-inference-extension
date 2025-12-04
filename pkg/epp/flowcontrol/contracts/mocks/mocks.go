@@ -38,6 +38,8 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/plugins"
+
 	typesmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
 )
 
@@ -111,16 +113,17 @@ func (m *MockRegistryShard) Stats() contracts.ShardStats {
 	return contracts.ShardStats{}
 }
 
-// MockSaturationDetector is a simple "stub-style" mock for testing.
-type MockSaturationDetector struct {
-	IsSaturatedFunc func(ctx context.Context, candidatePods []metrics.PodMetrics) bool
+// MockSaturationController is a simple "stub-style" mock for testing.
+type MockSaturationController struct {
+	ShouldDispatchV bool
 }
 
-func (m *MockSaturationDetector) IsSaturated(ctx context.Context, candidatePods []metrics.PodMetrics) bool {
-	if m.IsSaturatedFunc != nil {
-		return m.IsSaturatedFunc(ctx, candidatePods)
-	}
-	return false
+func (m *MockSaturationController) TypedName() plugins.TypedName {
+	return plugins.TypedName{Type: "MockSaturationController", Name: "MockSaturationController"}
+}
+
+func (m *MockSaturationController) ShouldDispatch(ctx context.Context, candidatePods []metrics.PodMetrics) bool {
+	return m.ShouldDispatchV
 }
 
 // MockManagedQueue is a high-fidelity, thread-safe mock of the `contracts.ManagedQueue` interface, designed

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,14 +35,14 @@ import (
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoyTypePb "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -50,9 +51,7 @@ import (
 	metricsutils "k8s.io/component-base/metrics/testutil"
 
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	k8sclient "sigs.k8s.io/controller-runtime/pkg/client"
-	crconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	crmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -66,7 +65,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metadata"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationcontroller/framework/plugins/staticthreshold"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling/framework/plugins/multi/prefix"
@@ -83,9 +82,7 @@ import (
 
 const (
 	// Test Infrastructure
-	testPoolName    = "vllm-llama3-8b-instruct-pool"
-	testNamespace   = "default"
-	testMetricsPort = 8889
+	testPoolName = "vllm-llama3-8b-instruct-pool"
 
 	// Model Names
 	modelMyModel         = "my-model"
@@ -100,12 +97,9 @@ const (
 )
 
 var (
-	testGRPCAddress = fmt.Sprintf("localhost:%d", server.DefaultGrpcPort)
-	serverRunner    *server.ExtProcServerRunner
-	k8sClient       k8sclient.Client
-	testEnv         *envtest.Environment
-	scheme          = runtime.NewScheme()
-	logger          = logutil.NewTestLogger().V(logutil.VERBOSE)
+	k8sClient k8sclient.Client
+	testEnv   *envtest.Environment
+	logger    = logutil.NewTestLogger().V(logutil.VERBOSE)
 )
 
 func TestMain(m *testing.M) {
@@ -1051,85 +1045,185 @@ func TestFullDuplexStreamed_KubeInferenceObjectiveRequest(t *testing.T) {
 	}
 }
 
+// setUpHermeticServer creates a fully isolated test environment for a single test case.
 func setUpHermeticServer(t *testing.T, podAndMetrics map[*backend.Pod]*backendmetrics.MetricsState) (client extProcPb.ExternalProcessor_ProcessClient, cleanup func()) {
-	// Reconfigure the TestPodMetricsClient.
+	// 1. Generate Identity for Isolation
+	testID := uuid.New().String()
+	testNamespace := fmt.Sprintf("test-ns-%s", testID[:8])
+
+	// 2. Create the Namespace
+	ns := &corev1.Namespace{}
+	ns.Name = testNamespace
+	require.NoError(t, k8sClient.Create(context.Background(), ns), "failed to create test namespace")
+
+	// 3. Define Identity
+	gknn := common.GKNN{
+		NamespacedName: types.NamespacedName{Namespace: testNamespace, Name: testPoolName},
+		GroupKind:      schema.GroupKind{Group: v1.GroupVersion.Group, Kind: "InferencePool"},
+	}
+
+	// 4. Find Free Ports (Force IPv4 to avoid ::1 vs 127.0.0.1 races)
+	grpcPort, err := getFreePort()
+	require.NoError(t, err)
+	testGRPCAddress := fmt.Sprintf("127.0.0.1:%d", grpcPort)
+
+	metricsPort, err := getFreePort()
+	require.NoError(t, err)
+
+	// 5. Configure Manager
+	metricsServerOptions := metricsserver.Options{
+		BindAddress:    fmt.Sprintf("127.0.0.1:%d", metricsPort),
+		FilterProvider: filters.WithAuthenticationAndAuthorization,
+	}
+
+	mgr, err := server.NewDefaultManager(
+		false, // disableK8sCrdReconcile
+		gknn,
+		testEnv.Config,
+		metricsServerOptions,
+		false, // leaderElectionEnabled
+		func(o *ctrl.Options) {
+			t := true
+			o.Controller.SkipNameValidation = &t
+		},
+	)
+	require.NoError(t, err, "failed to create manager")
+
+	// 6. Configure Runner
+	runner := &server.ExtProcServerRunner{
+		GKNN:                             gknn,
+		GrpcPort:                         grpcPort,
+		SecureServing:                    false,
+		HealthChecking:                   false,
+		DisableK8sCrdReconcile:           false,
+		TestPodMetricsClient:             &backendmetrics.FakePodMetricsClient{},
+		RefreshPrometheusMetricsInterval: 50 * time.Millisecond,
+		MetricsStalenessThreshold:        2 * time.Second,
+	}
+
+	// 7. Wire Dependencies
 	res := map[types.NamespacedName]*backendmetrics.MetricsState{}
 	for pod, metrics := range podAndMetrics {
-		res[pod.NamespacedName] = metrics
+		// Fix: Use the generated testNamespace, not the global placeholder
+		namespacedName := types.NamespacedName{Name: pod.PodName, Namespace: testNamespace}
+		res[namespacedName] = metrics
 	}
-	serverRunner.TestPodMetricsClient.SetRes(res)
+	runner.TestPodMetricsClient.SetRes(res)
 
-	serverCtx, stopServer := context.WithCancel(context.Background())
+	pmf := backendmetrics.NewPodMetricsFactory(runner.TestPodMetricsClient, 10*time.Millisecond)
+	runner.Datastore = datastore.NewDatastore(context.Background(), pmf, 0)
 
-	// TODO: this should be consistent with the inference pool
-	podLabels := map[string]string{
-		"app": testPoolName,
-	}
+	// Scheduler Setup
+	kvCacheUtilizationScorer := scorer.NewKVCacheUtilizationScorer()
+	queueingScorer := scorer.NewQueueScorer()
+	prefixCacheScorer := prefix.New(context.Background(), prefix.DefaultConfig)
+	loraAffinityScorer := scorer.NewLoraAffinityScorer()
 
+	defaultProfile := framework.NewSchedulerProfile().
+		WithScorers(framework.NewWeightedScorer(kvCacheUtilizationScorer, 1),
+			framework.NewWeightedScorer(queueingScorer, 1),
+			framework.NewWeightedScorer(prefixCacheScorer, 1),
+			framework.NewWeightedScorer(loraAffinityScorer, 1),
+		).
+		WithPicker(picker.NewMaxScorePicker(picker.DefaultMaxNumOfEndpoints))
+
+	profileHandler := profile.NewSingleProfileHandler()
+	schedulerConfig := scheduling.NewSchedulerConfig(profileHandler, map[string]*framework.SchedulerProfile{"default": defaultProfile})
+	scheduler := scheduling.NewSchedulerWithConfig(schedulerConfig)
+
+	satCtrlCfg, _ := staticthreshold.NewConfig(nil)
+	satCtrl := staticthreshold.NewController("saturation-controller", satCtrlCfg)
+	podLocator := requestcontrol.NewDatastorePodLocator(runner.Datastore)
+	cachedPodLocator := requestcontrol.NewCachedPodLocator(context.Background(), podLocator, time.Minute)
+	admissionController := requestcontrol.NewLegacyAdmissionController(satCtrl, cachedPodLocator)
+
+	runner.Director = requestcontrol.NewDirectorWithConfig(
+		runner.Datastore,
+		scheduler, admissionController,
+		cachedPodLocator,
+		requestcontrol.NewConfig(),
+	)
+
+	// 8. Start Manager
+	require.NoError(t, runner.SetupWithManager(context.Background(), mgr))
+
+	mgrCtx, cancelMgr := context.WithCancel(context.Background())
+	go func() {
+		if err := mgr.Start(mgrCtx); err != nil {
+			// Expected error on cancellation
+		}
+	}()
+
+	// 9. Create Resources
+	podLabels := map[string]string{"app": testPoolName}
 	for pod := range podAndMetrics {
-		pod := epptestutil.MakePod(pod.PodName).
-			Namespace(pod.NamespacedName.Namespace).
+		p := epptestutil.MakePod(pod.PodName).
+			Namespace(testNamespace).
 			ReadyCondition().
 			Labels(podLabels).
 			IP(pod.GetIPAddress()).
 			Complete().
 			ObjRef()
 
-		copy := pod.DeepCopy()
-		if err := k8sClient.Create(context.Background(), copy); err != nil {
-			logutil.Fatal(logger, err, "Failed to create pod", "pod", pod)
-		}
+		// Snapshot status before creation (API server wipes it)
+		desiredStatus := p.Status
+		require.NoError(t, k8sClient.Create(context.Background(), p))
 
-		// since no pod controllers deployed in fake environment, we manually update pod status
-		copy.Status = pod.Status
-		if err := k8sClient.Status().Update(context.Background(), copy); err != nil {
-			logutil.Fatal(logger, err, "Failed to update pod status", "pod", pod)
-		}
+		p.Status = desiredStatus
+		require.NoError(t, k8sClient.Status().Update(context.Background(), p))
 	}
-	go func() {
-		if err := serverRunner.AsRunnable(logger.WithName("ext-proc")).Start(serverCtx); err != nil {
-			logutil.Fatal(logger, err, "Failed to start ext-proc server")
-		}
-	}()
 
-	time.Sleep(serverRunner.RefreshPrometheusMetricsInterval) // wait for metrics to get available before running tests that rely on these metrics
+	manifestsPath := filepath.Join("..", "..", "testdata", "inferencepool-with-model-hermetic.yaml")
+	docs, err := readDocuments(manifestsPath)
+	require.NoError(t, err)
 
-	// check if all pods are synced to datastore
+	for _, doc := range docs {
+		obj := &unstructured.Unstructured{}
+		require.NoError(t, yaml.Unmarshal(doc, obj))
+		obj.SetNamespace(testNamespace)
+		require.NoError(t, k8sClient.Create(context.Background(), obj))
+	}
+
+	// 10. Wait for Sync (Datastore)
 	assert.EventuallyWithT(t, func(t *assert.CollectT) {
-		assert.Len(t, serverRunner.Datastore.PodList(backendmetrics.AllPodsPredicate), len(podAndMetrics), "Datastore not synced")
-	}, 10*time.Second, time.Second)
+		assert.True(t, runner.Datastore.PoolHasSynced(), "Pool not synced")
+		assert.NotNil(t, runner.Datastore.ObjectiveGet(modelMyModel), "Objective not found")
+		assert.Len(t, runner.Datastore.PodList(backendmetrics.AllPodsPredicate), len(podAndMetrics), "Pod count mismatch")
+	}, 10*time.Second, 100*time.Millisecond)
 
-	// Create a grpc connection
-	conn, err := grpc.NewClient(testGRPCAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		logutil.Fatal(logger, err, "Failed to connect", "address", testGRPCAddress)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	client, err = extProcPb.NewExternalProcessorClient(conn).Process(ctx)
-	if err != nil {
-		logutil.Fatal(logger, err, "Failed to create client")
-	}
-	return client, func() {
-		cancel()
-		conn.Close()
-		stopServer()
-
-		// clear created pods
-		for pod := range podAndMetrics {
-			pod := epptestutil.MakePod(pod.PodName).
-				Namespace(pod.NamespacedName.Namespace).Complete().ObjRef()
-
-			if err := k8sClient.Delete(context.Background(), pod); err != nil {
-				logutil.Fatal(logger, err, "Failed to delete pod", "pod", fakePod)
-			}
+	// 11. Wait for Port (Network Liveness)
+	// CRITICAL FIX: Ensure the port is actually open before dialing gRPC.
+	assert.Eventually(t, func() bool {
+		conn, err := net.DialTimeout("tcp", testGRPCAddress, 100*time.Millisecond)
+		if err != nil {
+			return false
 		}
+		conn.Close()
+		return true
+	}, 5*time.Second, 100*time.Millisecond, "gRPC server port %s not reachable", testGRPCAddress)
+
+	// 12. Connect Client
+	// Use NewClient (DialContext is deprecated) and insecure creds for loopback test
+	conn, err := grpc.NewClient(testGRPCAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+
+	ctx, cancelClient := context.WithTimeout(context.Background(), 10*time.Second)
+	client, err = extProcPb.NewExternalProcessorClient(conn).Process(ctx)
+	require.NoError(t, err)
+
+	return client, func() {
+		cancelClient()
+		conn.Close()
+		cancelMgr()
+		// cleanup namespace resources
+		_ = k8sClient.Delete(context.Background(), ns)
 	}
 }
 
+// fakePod uses a placeholder namespace. The actual namespace is overwritten in setUpHermeticServer.
 func fakePod(index int) *backend.Pod {
 	return &backend.Pod{
-		NamespacedName: types.NamespacedName{Name: fmt.Sprintf("pod-%v-rank-0", index), Namespace: testNamespace},
+		NamespacedName: types.NamespacedName{Name: fmt.Sprintf("pod-%v-rank-0", index), Namespace: "placeholder"},
 		Address:        fmt.Sprintf("192.168.1.%d", index+1),
 		PodName:        fmt.Sprintf("pod-%v", index),
 		Labels:         make(map[string]string, 0),
@@ -1163,9 +1257,8 @@ func newPodStates(states ...podState) map[*backend.Pod]*backendmetrics.MetricsSt
 	return res
 }
 
-// Sets up a test environment and returns the runner struct
+// Sets up a global test environment.
 func BeforeSuite() func() {
-	// Set up mock k8s API Client
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
@@ -1175,117 +1268,22 @@ func BeforeSuite() func() {
 		logutil.Fatal(logger, err, "Failed to start test environment", "config", cfg)
 	}
 
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(v1alpha2.Install(scheme))
-	utilruntime.Must(v1.Install(scheme))
+	utilruntime.Must(clientgoscheme.AddToScheme(server.Scheme))
+	utilruntime.Must(v1alpha2.Install(server.Scheme))
+	utilruntime.Must(v1.Install(server.Scheme))
 
-	k8sClient, err = k8sclient.New(cfg, k8sclient.Options{Scheme: scheme})
+	k8sClient, err = k8sclient.New(cfg, k8sclient.Options{Scheme: server.Scheme})
 	if err != nil {
 		logutil.Fatal(logger, err, "Failed to start k8s Client")
 	} else if k8sClient == nil {
 		logutil.Fatal(logger, nil, "No error, but returned kubernetes client is nil", "config", cfg)
 	}
 
-	// Init runtime.
 	ctrl.SetLogger(logger)
-
-	metrics.Register()
-	// Register metrics handler.
-	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
-	// More info:
-	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/metrics/server
-	// - https://book.kubebuilder.io/reference/metrics.html
-	metricsServerOptions := metricsserver.Options{
-		BindAddress:    fmt.Sprintf(":%d", testMetricsPort),
-		FilterProvider: filters.WithAuthenticationAndAuthorization,
-	}
-	mgr, err := server.NewManagerWithOptions(cfg, managerTestOptions(testNamespace, testPoolName, metricsServerOptions))
-	if err != nil {
-		logutil.Fatal(logger, err, "Failed to create controller manager")
-	}
-
-	serverRunner = server.NewDefaultExtProcServerRunner()
-	serverRunner.TestPodMetricsClient = &backendmetrics.FakePodMetricsClient{}
-	pmf := backendmetrics.NewPodMetricsFactory(serverRunner.TestPodMetricsClient, 10*time.Millisecond)
-	// Adjust from defaults
-	serverRunner.GKNN = common.GKNN{
-		NamespacedName: types.NamespacedName{Namespace: testNamespace, Name: testPoolName},
-		GroupKind:      schema.GroupKind{Group: v1.GroupVersion.Group, Kind: "InferencePool"},
-	}
-
-	serverRunner.Datastore = datastore.NewDatastore(context.Background(), pmf, 0)
-
-	kvCacheUtilizationScorer := scorer.NewKVCacheUtilizationScorer()
-	queueingScorer := scorer.NewQueueScorer()
-	prefixCacheScorer := prefix.New(context.Background(), prefix.DefaultConfig)
-	loraAffinityScorer := scorer.NewLoraAffinityScorer()
-
-	defaultProfile := framework.NewSchedulerProfile().
-		WithScorers(framework.NewWeightedScorer(kvCacheUtilizationScorer, 1),
-			framework.NewWeightedScorer(queueingScorer, 1),
-			framework.NewWeightedScorer(prefixCacheScorer, 1),
-			framework.NewWeightedScorer(loraAffinityScorer, 1),
-		).
-		WithPicker(picker.NewMaxScorePicker(picker.DefaultMaxNumOfEndpoints))
-
-	profileHandler := profile.NewSingleProfileHandler()
-
-	schedulerConfig := scheduling.NewSchedulerConfig(profileHandler, map[string]*framework.SchedulerProfile{"default": defaultProfile})
-	scheduler := scheduling.NewSchedulerWithConfig(schedulerConfig)
-
-	sdConfig := &saturationdetector.Config{
-		QueueDepthThreshold:       saturationdetector.DefaultQueueDepthThreshold,
-		KVCacheUtilThreshold:      saturationdetector.DefaultKVCacheUtilThreshold,
-		MetricsStalenessThreshold: saturationdetector.DefaultMetricsStalenessThreshold,
-	}
-	detector := saturationdetector.NewDetector(sdConfig, logger.WithName("saturation-detector"))
-	serverRunner.SaturationDetector = detector
-	admissionController := requestcontrol.NewLegacyAdmissionController(detector)
-	serverRunner.Director = requestcontrol.NewDirectorWithConfig(serverRunner.Datastore, scheduler, admissionController, requestcontrol.NewConfig())
-	serverRunner.SecureServing = false
-
-	if err := serverRunner.SetupWithManager(context.Background(), mgr); err != nil {
-		logutil.Fatal(logger, err, "Failed to setup server runner")
-	}
-
-	// Start the controller manager in a go routine, not blocking
-	go func() {
-		if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
-			logutil.Fatal(logger, err, "Failed to start manager")
-		}
-	}()
-
-	logger.Info("Setting up hermetic ExtProc server")
-
-	// Unmarshal CRDs from file into structs
-	manifestsPath := filepath.Join("..", "..", "testdata", "inferencepool-with-model-hermetic.yaml")
-	docs, err := readDocuments(manifestsPath)
-	if err != nil {
-		logutil.Fatal(logger, err, "Can't read object manifests", "path", manifestsPath)
-	}
-
-	for _, doc := range docs {
-		obj := &unstructured.Unstructured{}
-		if err = yaml.Unmarshal(doc, obj); err != nil {
-			logutil.Fatal(logger, err, "Can't unmarshal object", "document", doc)
-		}
-		logger.Info("Creating object", "kind", obj.GetKind(), "object", obj)
-		if err := k8sClient.Create(context.Background(), obj); err != nil {
-			logutil.Fatal(logger, err, "Unable to create object", "object", obj.GetName())
-		}
-	}
-
-	assert.Eventually(nil, func() bool {
-		modelExist := serverRunner.Datastore.ObjectiveGet(modelMyModel)
-		synced := serverRunner.Datastore.PoolHasSynced() && modelExist != nil
-		return synced
-	}, 10*time.Second, 10*time.Millisecond)
+	metrics.Register() // Register once globally.
 
 	return func() {
 		_ = testEnv.Stop()
-		_ = k8sClient.DeleteAllOf(context.Background(), &v1.InferencePool{})
-		_ = k8sClient.DeleteAllOf(context.Background(), &v1alpha2.InferenceObjective{})
-		_ = k8sClient.DeleteAllOf(context.Background(), &v1alpha2.InferenceModelRewrite{})
 	}
 }
 
@@ -1312,46 +1310,16 @@ func readDocuments(fp string) ([][]byte, error) {
 	return docs, nil
 }
 
-// inject options that allow multiple test runs to run
-// https://github.com/kubernetes-sigs/controller-runtime/issues/2937
-func managerTestOptions(namespace, name string, metricsServerOptions metricsserver.Options) ctrl.Options {
-	return ctrl.Options{
-		Scheme: scheme,
-		Cache: cache.Options{
-			ByObject: map[k8sclient.Object]cache.ByObject{
-				&corev1.Pod{}: {
-					Namespaces: map[string]cache.Config{
-						namespace: {},
-					},
-				},
-				&v1.InferencePool{}: {
-					Namespaces: map[string]cache.Config{
-						namespace: {
-							FieldSelector: fields.SelectorFromSet(fields.Set{
-								"metadata.name": name,
-							}),
-						},
-					},
-				},
-				&v1alpha2.InferenceObjective{}: {
-					Namespaces: map[string]cache.Config{
-						namespace: {},
-					},
-				},
-				&v1alpha2.InferenceModelRewrite{}: {
-					Namespaces: map[string]cache.Config{
-						namespace: {},
-					},
-				},
-			},
-		},
-		Controller: crconfig.Controller{
-			SkipNameValidation: boolPointer(true),
-		},
-		Metrics: metricsServerOptions,
+// getFreePort binds to a random port on 127.0.0.1 to ensure we get an IPv4-compatible port.
+func getFreePort() (int, error) {
+	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
 	}
-}
-
-func boolPointer(b bool) *bool {
-	return &b
+	l, err := net.ListenTCP("tcp", addr)
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port, nil
 }

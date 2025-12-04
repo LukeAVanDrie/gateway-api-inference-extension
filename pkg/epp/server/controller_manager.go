@@ -29,100 +29,125 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	v1 "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	"sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/common"
 )
 
-var scheme = runtime.NewScheme()
+// Scheme is the global runtime scheme used by the manager.
+// It is exported so unit tests can register their own types or use the same scheme.
+var Scheme = runtime.NewScheme()
 
 func init() {
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(v1alpha2.Install(scheme))
-	utilruntime.Must(v1.Install(scheme))
+	utilruntime.Must(clientgoscheme.AddToScheme(Scheme))
+	utilruntime.Must(v1alpha2.Install(Scheme))
+	utilruntime.Must(v1.Install(Scheme))
 }
 
-// defaultManagerOptions returns the default options used to create the manager.
-func defaultManagerOptions(disableK8sCrdReconcile bool, gknn common.GKNN, metricsServerOptions metricsserver.Options) (ctrl.Options, error) {
-	opt := ctrl.Options{
-		Scheme: scheme,
-		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Pod{}: {
-					Namespaces: map[string]cache.Config{
-						gknn.Namespace: {},
-					},
-				},
-				&v1alpha2.InferenceObjective{}: {
-					Namespaces: map[string]cache.Config{
-						gknn.Namespace: {},
-					},
-				},
-				&v1alpha2.InferenceModelRewrite{}: {
-					Namespaces: map[string]cache.Config{
-						gknn.Namespace: {},
-					},
-				},
-			},
-		},
-		Metrics: metricsServerOptions,
-	}
-	if !disableK8sCrdReconcile {
-		opt.Cache.ByObject[&v1alpha2.InferenceObjective{}] = cache.ByObject{Namespaces: map[string]cache.Config{
-			gknn.Namespace: {},
-		}}
-		switch gknn.Group {
-		case v1alpha2.GroupName:
-			opt.Cache.ByObject[&v1alpha2.InferencePool{}] = cache.ByObject{
-				Namespaces: map[string]cache.Config{gknn.Namespace: {FieldSelector: fields.SelectorFromSet(fields.Set{
-					"metadata.name": gknn.Name,
-				})}},
-			}
-		case v1.GroupName:
-			opt.Cache.ByObject[&v1.InferencePool{}] = cache.ByObject{
-				Namespaces: map[string]cache.Config{gknn.Namespace: {FieldSelector: fields.SelectorFromSet(fields.Set{
-					"metadata.name": gknn.Name,
-				})}},
-			}
-		default:
-			return ctrl.Options{}, fmt.Errorf("unknown group: %s", gknn.Group)
-		}
-	}
+// ManagerOption allows tweaking the controller-runtime Options before the Manager is created.
+// This is primarily used for testing (e.g., skipping name validation).
+type ManagerOption func(*ctrl.Options)
 
-	return opt, nil
-}
-
-// NewDefaultManager creates a new controller manager with default configuration.
-func NewDefaultManager(disableK8sCrdReconcile bool, gknn common.GKNN, restConfig *rest.Config, metricsServerOptions metricsserver.Options, leaderElectionEnabled bool) (ctrl.Manager, error) {
-	opt, err := defaultManagerOptions(disableK8sCrdReconcile, gknn, metricsServerOptions)
+// NewDefaultManager creates a new controller-runtime Manager.
+// It configures strict cache filtering to ensure the EPP only watches resources related to its specific InferencePool,
+// preventing OOMs in large clusters.
+func NewDefaultManager(
+	disableK8sCrdReconcile bool,
+	gknn common.GKNN,
+	restConfig *rest.Config,
+	metricsServerOptions metricsserver.Options,
+	leaderElectionEnabled bool,
+	opts ...ManagerOption,
+) (ctrl.Manager, error) {
+	cacheOpts, err := buildCacheOptions(disableK8sCrdReconcile, gknn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create controller manager options: %v", err)
+		return nil, fmt.Errorf("failed to configure cache options: %w", err)
+	}
+
+	ctrlOptions := ctrl.Options{
+		Scheme:  Scheme,
+		Cache:   cacheOpts,
+		Metrics: metricsServerOptions,
 	}
 
 	if leaderElectionEnabled {
-		opt.LeaderElection = true
-		opt.LeaderElectionResourceLock = "leases"
-		// The lease name needs to be unique per EPP deployment.
-		opt.LeaderElectionID = fmt.Sprintf("epp-%s-%s.gateway-api-inference-extension.sigs.k8s.io", gknn.Namespace, gknn.Name)
-		opt.LeaderElectionNamespace = gknn.Namespace
-		opt.LeaderElectionReleaseOnCancel = true
+		ctrlOptions.LeaderElection = true
+		ctrlOptions.LeaderElectionResourceLock = "leases"
+		ctrlOptions.LeaderElectionID = generateLeaderElectionID(gknn)
+		ctrlOptions.LeaderElectionNamespace = gknn.Namespace
+		ctrlOptions.LeaderElectionReleaseOnCancel = true
 	}
 
-	manager, err := ctrl.NewManager(restConfig, opt)
+	for _, opt := range opts {
+		opt(&ctrlOptions)
+	}
 
+	mgr, err := ctrl.NewManager(restConfig, ctrlOptions)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create controller manager: %v", err)
+		return nil, fmt.Errorf("failed to create controller manager: %w", err)
 	}
-	return manager, nil
+
+	return mgr, nil
 }
 
-// NewManagerWithOptions creates a new controller manager with injectable options.
-func NewManagerWithOptions(restConfig *rest.Config, opts manager.Options) (ctrl.Manager, error) {
-	manager, err := ctrl.NewManager(restConfig, opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create controller manager: %v", err)
+// buildCacheOptions constructs the cache filtering logic.
+// This is critical for performance; we must restrict the Informer's scope to the specific Namespace and, where
+// possible, the specific Name of the resources.
+func buildCacheOptions(disableCRDs bool, gknn common.GKNN) (cache.Options, error) {
+	// Base configuration: Always filter by Namespace.
+	defaultNamespaces := map[string]cache.Config{
+		gknn.Namespace: {},
 	}
-	return manager, nil
+
+	// 1. Core Resources (Always Watched)
+	// We watch Pods to gather metrics and update scheduling decisions.
+	byObject := map[client.Object]cache.ByObject{
+		&corev1.Pod{}: {Namespaces: map[string]cache.Config{
+			gknn.Namespace: {},
+		}},
+	}
+
+	// 2. CRD Resources (Conditional)
+	// If running in "Selector Mode" (no CRDs), we must NOT try to watch these or the manager will crash if the CRDs are
+	// missing from the cluster.
+	if !disableCRDs {
+		// Objectives and Rewrites are scoped to the namespace.
+		byObject[&v1alpha2.InferenceObjective{}] = cache.ByObject{Namespaces: map[string]cache.Config{
+			gknn.Namespace: {},
+		}}
+		byObject[&v1alpha2.InferenceModelRewrite{}] = cache.ByObject{Namespaces: map[string]cache.Config{
+			gknn.Namespace: {},
+		}}
+
+		// InferencePool is scoped to the specific NAME.
+		// We only care about the pool we are assigned to manage.
+		poolFilter := cache.Config{
+			FieldSelector: fields.SelectorFromSet(fields.Set{"metadata.name": gknn.Name}),
+		}
+
+		// Handle API Group versions.
+		switch gknn.Group {
+		case v1alpha2.GroupName:
+			byObject[&v1alpha2.InferencePool{}] = cache.ByObject{
+				Namespaces: map[string]cache.Config{gknn.Namespace: poolFilter},
+			}
+		case v1.GroupName:
+			byObject[&v1.InferencePool{}] = cache.ByObject{
+				Namespaces: map[string]cache.Config{gknn.Namespace: poolFilter},
+			}
+		default:
+			return cache.Options{}, fmt.Errorf("unsupported InferencePool group: %s", gknn.Group)
+		}
+	}
+
+	return cache.Options{
+		ByObject:          byObject,
+		DefaultNamespaces: defaultNamespaces,
+	}, nil
+}
+
+func generateLeaderElectionID(gknn common.GKNN) string {
+	// The ID must be unique per EPP deployment to prevent conflict between different pools.
+	return fmt.Sprintf("epp-%s-%s.gateway-api-inference-extension.sigs.k8s.io", gknn.Namespace, gknn.Name)
 }

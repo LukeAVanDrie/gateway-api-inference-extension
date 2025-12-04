@@ -1,20 +1,27 @@
 # EPP Configuration Flags
 
-This page documents selected configuration flags for the Endpoint Picker (EPP) binary. Most flags are self-explanatory via their `--help` descriptions; only flags with nuanced or non-obvious behavior are detailed here.
+This page documents specific configuration flags for the Endpoint Picker (EPP) binary. While most flags are
+self-explanatory via the `--help` output, the flags detailed below have nuanced behavior regarding discovery and
+backward compatibility.
 
-## --pool-namespace
+## Runtime Identity
+
+### `--pool-namespace`
 
 **Description:**
-Specifies the namespace of the InferencePool this Endpoint Picker is associated with.
+Specifies the Kubernetes namespace of the InferencePool managed by this EPP instance.
 
-**Resolution order:**
-1. If `--pool-namespace` is set to a non-empty value, its value is used.
-2. If the flag is not set (i.e., left empty), the `NAMESPACE` environment variable is checked. If set, its value is used.
-3. If neither is set, the namespace defaults to `default`.
+**Resolution Order:**
+The EPP determines its namespace using the following precedence:
+1.  **Flag:** Uses the value of `--pool-namespace` if explicitly set.
+2.  **Env:** Falls back to the `NAMESPACE` environment variable if the flag is omitted.
+3.  **Default:** Defaults to `default` if neither are present.
 
-This allows the EPP to automatically use the namespace it is running in (when the `NAMESPACE` env var is set via Kubernetes Downward API), without requiring explicit configuration. If you want to force the use of the default namespace, explicitly set `--pool-namespace=default`. If you want to use the environment variable or fallback, leave the flag unset or set it to an empty string.
+**Best Practice:**
+Leave this flag unset and inject the `NAMESPACE` environment variable via the Kubernetes Downward API. This allows the
+EPP to automatically discover its own namespace, making your deployment manifests portable across environments.
 
-**Example manifest snippet to set the env var from pod metadata:**
+**Example: Injecting Namespace via Downward API**
 
 ```yaml
 env:
@@ -26,8 +33,39 @@ env:
 
 ---
 
-For a full list of flags, run:
+## Deprecated Configuration
 
-```
+The following configuration methods are **deprecated** and will be removed in a future release. Users are strongly
+encouraged to migrate to the [Text-Based Configuration](./config-file.md) format.
+
+### Environment Variables
+
+The use of environment variables for core logic configuration is deprecated.
+
+| Deprecated Env Var | Replacement in YAML Config |
+| :--- | :--- |
+| `SD_QUEUE_DEPTH_THRESHOLD` | Plugin `SaturationController` parameter: `queueDepthThreshold` |
+| `SD_KV_CACHE_UTIL_THRESHOLD` | Plugin `SaturationController` parameter: `kvCacheUtilThreshold` |
+| `SD_METRICS_STALENESS_THRESHOLD` | Plugin `SaturationController` parameter: `metricsStalenessThreshold` |
+| `ENABLE_EXPERIMENTAL_FLOW_CONTROL_LAYER` | `featureGates: ["flowControl"]` |
+| `ENABLE_EXPERIMENTAL_DATALAYER_V2` | `featureGates: ["dataLayer"]` |
+
+### Legacy Metric Flags
+
+Direct configuration of backend scraping via CLI flags is deprecated in favor of the **Data Layer v2** configuration.
+
+| Deprecated Flag | Migration Path |
+| :--- | :--- |
+| `--model-server-metrics-port` | Configure a `metrics` source in the YAML config file. |
+| `--model-server-metrics-path` | Configure a `metrics` source in the YAML config file. |
+| `--model-server-metrics-scheme` | Configure a `metrics` source in the YAML config file. |
+| `--total-queued-requests-metric` | Configure a `metrics` extractor in the YAML config file. |
+| `--kv-cache-usage-percentage-metric` | Configure a `metrics` extractor in the YAML config file. |
+
+---
+
+For a complete list of all available flags, run:
+
+```bash
 EPP_BINARY --help
 ```

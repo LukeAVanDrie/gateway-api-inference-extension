@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
+	satctrl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationcontroller/framework"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
 
@@ -64,7 +65,7 @@ var ErrProcessorBusy = errors.New("shard processor is busy")
 // inherently atomic without coarse-grained locks.
 type ShardProcessor struct {
 	shard                contracts.RegistryShard
-	saturationDetector   contracts.SaturationDetector
+	saturationController satctrl.SaturationController
 	clock                clock.WithTicker
 	cleanupSweepInterval time.Duration
 	logger               logr.Logger
@@ -85,7 +86,7 @@ type ShardProcessor struct {
 func NewShardProcessor(
 	ctx context.Context,
 	shard contracts.RegistryShard,
-	saturationDetector contracts.SaturationDetector,
+	saturationController satctrl.SaturationController,
 	clock clock.WithTicker,
 	cleanupSweepInterval time.Duration,
 	enqueueChannelBufferSize int,
@@ -93,7 +94,7 @@ func NewShardProcessor(
 ) *ShardProcessor {
 	return &ShardProcessor{
 		shard:                shard,
-		saturationDetector:   saturationDetector,
+		saturationController: saturationController,
 		clock:                clock,
 		cleanupSweepInterval: cleanupSweepInterval,
 		logger:               logger,
@@ -307,8 +308,7 @@ func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
 
 		// --- Viability Check (Saturation/HoL Blocking) ---
 		req := item.OriginalRequest()
-		candidatePods := req.CandidatePodsForScheduling()
-		if sp.saturationDetector.IsSaturated(ctx, candidatePods) {
+		if !sp.saturationController.ShouldDispatch(ctx, nil) {
 			sp.logger.V(logutil.DEBUG).Info("Policy's chosen item is saturated; enforcing HoL blocking.",
 				"flowKey", req.FlowKey(), "reqID", req.ID(), "priorityName", originalBand.PriorityName())
 			// Stop the dispatch cycle entirely to respect strict policy decision and prevent priority inversion where

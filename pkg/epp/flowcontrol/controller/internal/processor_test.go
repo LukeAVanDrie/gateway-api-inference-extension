@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts/mocks"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework"
@@ -71,10 +70,10 @@ type testHarness struct {
 	startSignal chan struct{}
 
 	// Core components under test
-	processor          *ShardProcessor
-	clock              *testclock.FakeClock
-	logger             logr.Logger
-	saturationDetector *mocks.MockSaturationDetector
+	processor            *ShardProcessor
+	clock                *testclock.FakeClock
+	logger               logr.Logger
+	saturationController *mocks.MockSaturationController
 
 	// --- Centralized Mock State ---
 	// The harness's mutex protects the single source of truth for all mock state.
@@ -91,14 +90,14 @@ type testHarness struct {
 func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarness {
 	t.Helper()
 	h := &testHarness{
-		t:                  t,
-		MockRegistryShard:  &mocks.MockRegistryShard{},
-		clock:              testclock.NewFakeClock(time.Now()),
-		logger:             logr.Discard(),
-		saturationDetector: &mocks.MockSaturationDetector{},
-		startSignal:        make(chan struct{}),
-		queues:             make(map[types.FlowKey]*mocks.MockManagedQueue),
-		priorityFlows:      make(map[int][]types.FlowKey),
+		t:                    t,
+		MockRegistryShard:    &mocks.MockRegistryShard{},
+		clock:                testclock.NewFakeClock(time.Now()),
+		logger:               logr.Discard(),
+		saturationController: &mocks.MockSaturationController{ShouldDispatchV: true},
+		startSignal:          make(chan struct{}),
+		queues:               make(map[types.FlowKey]*mocks.MockManagedQueue),
+		priorityFlows:        make(map[int][]types.FlowKey),
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 
@@ -122,7 +121,7 @@ func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarn
 	h.processor = NewShardProcessor(
 		h.ctx,
 		h,
-		h.saturationDetector,
+		h.saturationController,
 		h.clock,
 		expiryCleanupInterval,
 		100,
@@ -748,9 +747,7 @@ func TestShardProcessor(t *testing.T) {
 							qLow := h.addQueue(keyLow)
 							require.NoError(t, qLow.Add(h.newTestItem("item-low", keyLow, testTTL)))
 
-							h.saturationDetector.IsSaturatedFunc = func(_ context.Context, _ []metrics.PodMetrics) bool {
-								return true
-							}
+							h.saturationController.ShouldDispatchV = false
 						},
 						expectDidDispatch: false,
 					},

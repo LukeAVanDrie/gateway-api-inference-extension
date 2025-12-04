@@ -22,22 +22,17 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 )
 
-// SaturationDetector defines the contract for a component that provides real-time load signals to the
-// `controller.FlowController`.
+// PodLocator defines the contract for a component that resolves the set of candidate pods for a request based on its
+// metadata.
 //
-// This interface abstracts away the complexity of determining system load. An implementation would consume various
-// backend metrics (e.g., queue depths, KV cache utilization, observed latencies) and translate them into a simple
-// boolean signal.
-//
-// This decoupling is important because it allows the saturation detection logic to evolve independently of the core
-// `controller.FlowController` engine, which is only concerned with the final true/false signal.
+// This interface allows the Flow Controller to fetch a fresh list of pods dynamically during the dispatch cycle,
+// enabling support for "Scale-from-Zero" scenarios where pods may not exist when the request is first enqueued.
+// It also decouples the Flow Controller from the underlying datastore and filtering logic (e.g., subsetting).
 //
 // # Conformance
 //
 // Implementations MUST be goroutine-safe.
-type SaturationDetector interface {
-	// IsSaturated returns true if the system's backend resources are considered saturated for a set of candidate pods.
-	// `controller.FlowController`'s dispatch workers call this method to decide whether to pause or throttle dispatch
-	// operations to prevent overwhelming the backends.
-	IsSaturated(ctx context.Context, candidatePods []metrics.PodMetrics) bool
+type PodLocator interface {
+	// Locate returns a list of pod metrics that match the criteria defined in the request metadata.
+	Locate(ctx context.Context, requestMetadata map[string]any) []metrics.PodMetrics
 }

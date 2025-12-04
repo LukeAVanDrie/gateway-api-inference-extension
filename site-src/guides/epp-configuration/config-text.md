@@ -1,352 +1,189 @@
-# Configuring via YAML
+# EPP Configuration (YAML)
 
-The Inference Gateway (IGW) can be configured via a YAML file.
+The Endpoint Picker (EPP) is configured via a YAML file (or inline text).
+This configuration defines the behavioral logic of the gateway:
 
-At this time the YAML file based configuration allows for:
+1.  **Plugins:** The modular components to load (Scorers, Controllers, Connectors, Hooks).
+2.  **Scheduling Profiles:** How scheduling plugins are composed into routing pipelines.
+3.  **Feature Gates:** Which experimental features to enable.
 
-1. The set of the lifecycle hooks (plugins) that are used by the IGW.
-2. The configuration of the saturation detector
-3. A set of feature gates that are used to enable experimental features.
+***NOTE***: Although this configuration resembles a Kubernetes CRD, it is **static**. It is read only at startup;
+changes to this file require restarting the EPP to take effect.
 
-The YAML file can either be specified as a path to a file or in-line as a parameter.
+### Architecture & Extension Points
 
-***NOTE***: While the configuration text looks like a Kubernetes CRD, it is
-**NOT** a Kubernetes CRD. Specifically, the config is not reconciled upon, and is only read on startup.
-This behavior is intentional, as augmenting the scheduling config without redeploying the EPP is not supported.
+The Endpoint Picker (EPP) is a modular system composed of **Plugins**. To configure them correctly, it is helpful to
+distinguish between the four main categories:
 
-The configuration text has the following form:
+1.  **Scheduling Plugins (The "Which Pod?" Decision)**
+    These execute **per-request** to rank and select backends. They form a pipeline (Filter &rarr; Score &rarr; Pick)
+    and **must** be referenced in a **Scheduling Profile** to take effect.
+    *   **Filters:** Exclude backends.
+    *   **Scorers:** Rank backends (e.g., `PrefixCacheScorer`).
+    *   **Pickers:** Select the winner (e.g., `MaxScorePicker`).
+
+2.  **Flow Control Plugins (System Protection)**
+    These operate as global controllers or gatekeepers to protect the system from overload.
+    They are typically active simply by being defined in the `plugins` list; they do not need to be added to a
+    scheduling profile.
+    *   **Saturation Controller:** Monitors backend metrics (Queue Depth, KV Cache) to detect overload.
+
+3.  **Request Lifecycle Plugins (Interception & Hooks)**
+    These hooks execute at specific points in the request path to perform logic, logging, or data modification.
+    They are automatically registered into the request path upon instantiation.
+    *   **Admission:** Validates requests before scheduling (e.g., `AdmissionPlugin`).
+    *   **Data Prep:** Enriches requests with necessary data (e.g., `PrepareDataPlugin`).
+    *   **Hooks:** `PreRequest`, `ResponseReceived`, `ResponseStreaming`, and `ResponseComplete` hooks for custom logic.
+
+4.  **Data Layer Plugins (Observability)**
+    These manage the ingestion of metrics from model servers, feeding the data used by other plugins.
+    *   **Data Sources:** Connectors for scraping or receiving backend metrics.
+
+### Structure
+
+The configuration follows this structure:
+
 ```yaml
 apiVersion: inference.networking.x-k8s.io/v1alpha1
 kind: EndpointPickerConfig
 plugins:
-- ....
-- ....
+  # Instantiates plugins with specific parameters
+  - name: my-scorer
+    type: prefix-cache-scorer
+    parameters: { ... }
 schedulingProfiles:
-- ....
-- ....
-saturationDetector:
-  ...
+  # Defines how to use the instantiated scheduling plugins
+  - name: default
+    plugins:
+      - pluginRef: my-scorer
+        weight: 50
 featureGates:
-  ...
+  # Enables experimental features
+  - flowControl
 ```
 
-The first two lines of the configuration are constant and must appear as is.
+### 1. Configuring Plugins
 
-The plugins section defines the set of plugins that will be instantiated and their parameters. This section is described in more detail in the section [Configuring Plugins via text](#configuring-plugins-via-text)
+The `plugins` section defines which logic components are loaded.
 
-The schedulingProfiles section defines the set of scheduling profiles that can be used in scheduling
-requests to pods. This section is described in more detail in the section [Configuring Plugins via YAML](#configuring-plugins-via-yaml)
+*   **name** (Optional): A unique alias for this instance. If omitted, the `type` is used as the name.
+*   **type**: The identifier of the plugin implementation (see [Plugin Reference](#plugin-reference)).
+*   **parameters** (Optional): Key-value pairs specific to that plugin type.
 
-The saturationDetector section configures the saturation detector, which is used to determine if special
-action needs to eb taken due to the system being overloaded or saturated. This section is described in more detail in the section [Saturation Detector configuration](#saturation-detector-configuration)
+### 2. Configuring Scheduling Profiles
 
-The featureGates sections allows the enablement of experimental features of the IGW. This section is
-described in more detail in the section [Feature Gates](#feature-gates)
+The `schedulingProfiles` section defines routing behavior. You can define multiple profiles (e.g., one for prefill, one
+for decode), though a single `default` profile is sufficient for most use cases.
 
-## Configuring Plugins via YAML
+*   **name**: The unique name of the profile.
+*   **plugins**: A list of references to instantiated plugins.
+    *   **pluginRef**: Matches the `name` (or `type`) defined in the `plugins` section.
+    *   **weight** (Optional): Used for Scorers. Defaults to `1`.
 
-The set of plugins that are used by the IGW is determined by how it is configured. The IGW is
-primarily configured via a configuration file.
+**Defaults & Behavior:**
+*   If no `schedulingProfiles` are defined, a `default` profile is automatically created using all loaded plugins.
+*   If no **Picker** is referenced in a profile, a `MaxScorePicker` is automatically added.
+*   If only one profile exists, the `SingleProfileHandler` is automatically used.
 
-The configuration defines the set of plugins to be instantiated along with their parameters.
-Each plugin can also be given a name, enabling the same plugin type to be instantiated multiple
-times, if needed (such as when configuring multiple scheduling profiles).
+### Example Configuration
 
-Also defined is a set of SchedulingProfiles, which determine the set of plugins to be used when scheduling
-a request. If one is not defined, a default one names `default` will be added and will reference all of
-the instantiated plugins.
-
-The set of plugins instantiated can include a Profile Handler, which determines which SchedulingProfiles
-will be used for a particular request. A Profile Handler must be specified, unless the configuration only
-contains one profile, in which case the `SingleProfileHandler` will be used.
-
-In addition, the set of instantiated plugins can also include a picker, which chooses the actual pod to which
-the request is scheduled after filtering and scoring. If one is not referenced in a SchedulingProfile, an
-instance of `MaxScorePicker` will be added to the SchedulingProfile in question.
-
-The plugins section defines the set of plugins that will be instantiated and their parameters.
-Each entry in this section has the following form:
-
+Passing configuration via a file:
 ```yaml
-- name: aName
-  type: a-type
-  parameters:
-    parm1: val1
-    parm2: val2
+args:
+  - --config-file
+  - "/etc/epp/epp-config.yaml"
 ```
 
-The fields in a plugin entry are:
-
-- *name* which is optional, provides a name by which the plugin instance can be referenced. If this
-field is omitted, the plugin's type will be used as its name.
-- *type* specifies the type of the plugin to be instantiated.
-- *parameters* which is optional, defines the set of parameters used to configure the plugin in question.
-The actual set of parameters varies from plugin to plugin.
-
-The schedulingProfiles section defines the set of scheduling profiles that can be used in scheduling
-requests to pods. The number of scheduling profiles one defines, depends on the use case. For simple
-serving of requests, one is enough. For disaggregated prefill, two profiles are required. Each entry
-in this section has the following form:
-
+Passing configuration inline:
 ```yaml
-- name: aName
-  plugins:
-  - pluginRef: plugin1
-  - pluginRef: plugin2
-    weight: 50
+args:
+  - --config-text
+  - |
+    apiVersion: inference.networking.x-k8s.io/v1alpha1
+    kind: EndpointPickerConfig
+    plugins:
+    - type: prefix-cache-scorer
+      parameters:
+        blockSize: 5
+    - type: saturation-controller
+      parameters:
+        queueDepthThreshold: 10
+    schedulingProfiles:
+    - name: default
+      plugins:
+      - pluginRef: prefix-cache-scorer
+        weight: 50
+    featureGates:
+    - flowControl
 ```
 
-The fields in a schedulingProfile entry are:
+---
 
-- *name* specifies the scheduling profile's name.
-- *plugins* specifies the set of plugins to be used when this scheduling profile is chosen for a request.
-Each entry in the schedulingProfile's plugins section has the following fields:
-  - *pluginRef* is a reference to the name of the plugin instance to be used
-  - *weight* is the weight to be used if the referenced plugin is a scorer. If omitted, a weight of one
-    will be used.
-
-A complete configuration might look like this:
-```yaml
-apiVersion: inference.networking.x-k8s.io/v1alpha1
-kind: EndpointPickerConfig
-plugins:
-- type: prefix-cache-scorer
-  parameters:
-    blockSize: 5
-    maxPrefixBlocksToMatch: 256
-    lruCapacityPerServer: 31250
-schedulingProfiles:
-- name: default
-  plugins:
-  - pluginRef: prefix-cache-scorer
-    weight: 50
-```
-
-If the configuration is in a file, the EPP command line argument `--config-file`
-should be used to specify the full path of the file in question. For example:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ${EPP_NAME}
-  ...
-spec:
-  ...
-  template:
-    ...
-    spec:
-      ...
-      containers:
-      - name: epp
-        image: ghcr.io/llm-d/llm-d-inference-scheduler:latest
-        imagePullPolicy: IfNotPresent
-        args:
-        - --pool-name
-        - "${POOL_NAME}"
-        ...
-        - --config-file
-        - "/etc/epp/epp-config.yaml"
-```
-
-If the configuration is passed as in-line text the EPP command line argument `--config-text`
-should be used. For example:
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: ${EPP_NAME}
-  ...
-spec:
-  ...
-  template:
-    ...
-    spec:
-      ...
-      containers:
-      - name: epp
-        image: ghcr.io/llm-d/llm-d-inference-scheduler:latest
-        imagePullPolicy: IfNotPresent
-        args:
-        - --pool-name
-        - "${POOL_NAME}"
-        ...
-        - --config-text
-        - |
-          apiVersion: inference.networking.x-k8s.io/v1alpha1
-          kind: EndpointPickerConfig
-          plugins:
-          - type: prefix-cache-scorer
-            parameters:
-              blockSize: 5
-              maxPrefixBlocksToMatch: 256
-              lruCapacityPerServer: 31250
-          schedulingProfiles:
-          - name: default
-            plugins:
-            - pluginRef: prefix-cache-scorer
-              weight: 50
-```
-
-The EPP configuration in the above two examples are equivalent to the following configuration after
-defaults have been applied:
-
-```yaml
-apiVersion: inference.networking.x-k8s.io/v1alpha1
-kind: EndpointPickerConfig
-plugins:
-- type: prefix-cache-scorer
-  parameters:
-    blockSize: 5
-    maxPrefixBlocksToMatch: 256
-    lruCapacityPerServer: 31250
-- type: single-profile-handler
-- type: max-score-picker
-schedulingProfiles:
-- name: default
-  plugins:
-  - pluginRef: prefix-cache-scorer
-    weight: 50
-  -pluginRef: max-score-picker
-```
-
-### Plugin Configuration
-
-This section describes how to setup the various plugins that are available with the IGW.
+### Plugin Reference
 
 #### **SingleProfileHandler**
-
-Selects a single profile which is always the primary profile.
-
-- *Type*: single-profile-handler
-- *Parameters*: none
+Determines which profile to use for a request.
+*   **Type**: `single-profile-handler`
+*   **Parameters**: None.
+*   *Note:* Automatically enabled if only one profile is defined.
 
 #### **PrefixCacheScorer**
-
-Scores pods based on the amount of the prompt is believed to be in the pod's KvCache.
-
-- *Type*: prefix-cache-scorer
-- *Parameters*:
-  - `blockSize` specified the size of the blocks to break up the input prompt when
-    calculating the block hashes. If not specified defaults to `64`
-  - `maxPrefixBlocksToMatch` specifies the maximum number of prefix blocks to match. If
-   not specified defaults to `256`
-  - `lruCapacityPerServer` specifies the capacity of the LRU indexer in number of entries
-    per server (pod). If not specified defaults to `31250`
-
-#### **LoRAAffinityScorer**
-
-Scores pods based on whether the requested LoRA adapter is already loaded in the pod's HBM, or if
-the pod is ready to load the LoRA on demand.
-
-- *Type*: lora-affinity-scorer
-- *Parameters*: none
-
-#### **MaxScorePicker**
-
-Picks the pod with the maximum score from the list of candidates. This is the default picker plugin
-if not specified.
-
-- *Type*: max-score-picker
-- *Parameters*: 
-  - `maxNumOfEndpoints`: Maximum number of endpoints to pick from the list of candidates, based on
-    the scores of those endpoints. If not specified defaults to `1`.
-
-#### **RandomPicker**
-
-Picks a random pod from the list of candidates.
-
-- *Type*: random-picker
-- *Parameters*: 
-  - `maxNumOfEndpoints`: Maximum number of endpoints to pick from the list of candidates. If not
-    specified defaults to `1`.
-
-#### **WeightedRandomPicker**
-
-Picks pod(s) from the list of candidates based on weighted random sampling using A-Res algorithm.
-
-- *Type*: weighted-random-picker
-- *Parameters*:
-  - `maxNumOfEndpoints`: Maximum number of endpoints to pick from the list of candidates. If not
-    specified defaults to `1`.
+Scores pods based on estimated KV-cache hits (common prefix matching).
+*   **Type**: `prefix-cache-scorer`
+*   **Parameters**:
+    *   `blockSize` (int, default: 64): Token block size for hashing.
+    *   `maxPrefixBlocksToMatch` (int, default: 256): Limit on matching depth.
+    *   `lruCapacityPerServer` (int, default: 31250): Size of the LRU index per backend.
 
 #### **KvCacheScorer**
-
-Scores the candidate pods based on their KV cache utilization.
-
-- *Type*: kv-cache-utilization-scorer
-- *Parameters*: none
+Scores pods based on current KV cache utilization (lower usage = higher score).
+*   **Type**: `kv-cache-utilization-scorer`
+*   **Parameters**: None.
 
 #### **QueueScorer**
-
-Scores list of candidate pods based on the pod's waiting queue size. The lower the
-waiting queue size the pod has, the higher the score it will get (since it's more
-available to serve new request).
-
-- *Type*: queue-scorer
-- *Parameters*: none
-
+Scores pods based on waiting queue size (shorter queue = higher score).
+*   **Type**: `queue-scorer`
+*   **Parameters**: None.
 
 #### **LoraAffinityScorer**
+Scores pods higher if they already have the requested LoRA adapter loaded.
+*   **Type**: `lora-affinity-scorer`
+*   **Parameters**: None.
 
-Scores list of candidate pods based on the LoRA adapters loaded on the pod. 
-Pods with the adapter already loaded or able to be actively loaded will be 
-scored higher (since it's more available to serve new request).
+#### **MaxScorePicker**
+Selects the pod with the highest total score.
+*   **Type**: `max-score-picker`
+*   **Parameters**:
+    *   `maxNumOfEndpoints` (int, default: 1): Number of top candidates to select.
 
-- *Type*: lora-affinity-scorer
-- *Parameters*: none
+#### **RandomPicker**
+Selects a random pod from the candidates.
+*   **Type**: `random-picker`
+*   **Parameters**:
+    *   `maxNumOfEndpoints` (int, default: 1).
 
-## Saturation Detector configuration
+#### **WeightedRandomPicker**
+Selects pods using weighted random sampling (A-Res algorithm) based on scores.
+*   **Type**: `weighted-random-picker`
+*   **Parameters**:
+    *   `maxNumOfEndpoints` (int, default: 1).
 
-The Saturation Detector is used to determine if the the cluster is overloaded, i.e. saturated. When
-the cluster is saturated special actions will be taken depending what has been enabled. At this time, sheddable requests will be dropped.
+#### **StaticThresholdSaturationController**
+Acts as the gatekeeper for the Flow Control system. It monitors backend capacity signals to prevent overload.
+*   **Type**: `static-threshold-saturation-controller`
+*   **Parameters**:
+    *   `queueDepthThreshold` (int, default: 5): The target waiting queue size on the backend.
+        * **> 0 (Throughput Mode):** Allows local buffering to maximize batch size/GPU utilization.
+        * **0 (Latency Mode):** Forces Just-In-Time dispatching for strict priority/fairness.
+    *   `kvCacheUtilThreshold` (float, default: 0.8): The safety ceiling (0.0-1.0) for KV cache usage.
+    *   `metricsStalenessThreshold` (duration, default: 200ms): The maximum age of metrics before a backend is
+        considered unsafe.
 
-The Saturation Detector determines that the cluster is saturated by looking at the following metrics provided by the inference servers:
+---
 
-- Backed waiting queue size
-- KV cache utilization
-- Metrics staleness
+### Feature Gates
 
-The Saturation Detector is configured via the saturationDetector section of the overall configuration.
-It has the following form:
+Enables experimental functionality.
 
-```yaml
-saturationDetector:
-  queueDepthThreshold: 8
-  kvCacheUtilThreshold: 0.75
-  metricsStalenessThreshold: 150ms
-```
-
-The various sub-fields of the saturationDetector section are:
-
-- The `queueDepthThreshold` field which defines the backend waiting queue size above which a
-pod is considered to have insufficient capacity for new requests. This field is optional, if
-omitted a value of `5` will be used.
-- The `kvCacheUtilThreshold` field which defines the KV cache utilization (0.0 to 1.0) above
-which a pod is considered to have insufficient capacity. This field is optional, if omitted
-a value of `0.8` will be used.
-- The `metricsStalenessThreshold` field which defines how old a pod's metrics can be. If a pod's
-metrics are older than this, it might be excluded from "good capacity" considerations or treated
-as having no capacity for safety. This field is optional, if omitted a value of `200ms` will be used.
-
-## Feature Gates
-
-The Feature Gates section allows for the enabling of experimental features of the IGW. These experimental
-features are all disabled unless you explicitly enable them one by one.
-
-The Feature Gates section has the follwoing form:
-
-```yaml
-featureGates:
-- dataLayer
-- flowControl
-```
-
-The Feature Gates section is an array of flags, each of which enables one experimental feature.
-The available values for these elements are:
-
-- `dataLayer` which, if present, enables the experimental Datalayer APIs.
-- `flowControl` which, if present, enables the experimental FlowControl feature.
-
-In all cases if the appropriate element isn't present, that experimental feature will be disabled.
+*   `dataLayer`: Enables the experimental Data Layer APIs.
+*   `flowControl`: Enables the Flow Control and Saturation logic.

@@ -18,7 +18,6 @@ package runner
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 
 	extProcPb "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -31,6 +30,15 @@ import (
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/logging"
 )
 
+const (
+	// livenessService indicates the check is for basic process existence.
+	livenessService = "liveness"
+	// readinessService indicates the check is for traffic-serving capability.
+	readinessService = "readiness"
+)
+
+// healthServer implements the standard gRPC Health Checking Protocol.
+// It adapts the health status based on leader election and datastore synchronization.
 type healthServer struct {
 	logger                logr.Logger
 	datastore             datastore.Datastore
@@ -38,76 +46,94 @@ type healthServer struct {
 	leaderElectionEnabled bool
 }
 
-const (
-	LivenessCheckService  = "liveness"
-	ReadinessCheckService = "readiness"
-)
-
+// Check implements the health checking logic.
+//
+// Policy:
+//  1. Liveness ("liveness"): Always SERVING. If this handler is reachable, the process is alive.
+//  2. Readiness ("readiness"): SERVING only if the instance is the Leader (if HA enabled) AND the Datastore is synced.
+//  3. ExtProc Service: Mirrors Readiness.
+//  4. Overall Health (""): Mirrors Readiness. Load Balancers using the default check expect to know if they can send
+//     traffic.
 func (s *healthServer) Check(ctx context.Context, in *healthPb.HealthCheckRequest) (*healthPb.HealthCheckResponse, error) {
-	isLive := s.datastore.PoolHasSynced()
+	var requiredChecksPassed bool
 
-	// If leader election is disabled, use current logic: all checks are based on whether the pool has synced.
-	if !s.leaderElectionEnabled {
-		if !isLive {
-			s.logger.V(logutil.DEFAULT).Info("gRPC health check not serving (leader election disabled)", "service", in.Service)
-			return &healthPb.HealthCheckResponse{Status: healthPb.HealthCheckResponse_NOT_SERVING}, nil
-		}
-		s.logger.V(logutil.TRACE).Info("gRPC health check serving (leader election disabled)", "service", in.Service)
-		return &healthPb.HealthCheckResponse{Status: healthPb.HealthCheckResponse_SERVING}, nil
+	// Cached state to avoid racing/locking overhead during high-frequency checks.
+	isSynced := s.datastore.PoolHasSynced()
+	isLeader := s.isLeader.Load()
+
+	// Logic Matrix:
+	// - Leader Election Enabled:  Readiness requires (Leader && Synced). Liveness requires (True).
+	// - Leader Election Disabled: Readiness requires (Synced).           Liveness requires (True).
+	isReady := isSynced
+	if s.leaderElectionEnabled {
+		isReady = isSynced && isLeader
 	}
-
-	// When leader election is enabled, differentiate between liveness and readiness.
-	// The service name in the request determines which check to perform.
-	var checkName string
-	var isPassing bool
 
 	switch in.Service {
-	case ReadinessCheckService:
-		checkName = "readiness"
-		isPassing = isLive && s.isLeader.Load()
-	case "": // Handle overall server health for load balancers that use an empty service name.
-		checkName = "empty service name (considered as overall health)"
-		// The overall health for a load balancer should reflect readiness to accept traffic,
-		// which is true only for the leader pod that has synced its data.
-		isPassing = isLive && s.isLeader.Load()
-	case LivenessCheckService:
-		checkName = "liveness"
-		// Any pod that is running and can respond to this gRPC check is considered "live".
-		// The datastore sync status should not affect liveness, only readiness.
-		// This is to prevent the non-leader node from continuous restarts
-		isPassing = true
-	case extProcPb.ExternalProcessor_ServiceDesc.ServiceName:
-		// The main service is considered ready only on the leader.
-		checkName = "ext_proc"
-		isPassing = isLive && s.isLeader.Load()
+	case livenessService:
+		// Explicit Liveness Probe:
+		// We are reachable, therefore we are alive.
+		// We do NOT check sync/leader status here. Doing so would cause Kubelet to restart the pod during long initial
+		// syncs or kill healthy standby replicas
+		requiredChecksPassed = true
+	case "", readinessService, extProcPb.ExternalProcessor_ServiceDesc.ServiceName:
+		// Load Balancer / Readiness Probe:
+		// We can only accept traffic if we are the active leader and have data.
+		//
+		// The empty string ("") represents "Overall Health".
+		// For a traffic-handling component, this implies "Ready to Serve".
+		// If we are not ready (syncing or standby), we must return NOT_SERVING so LBs stop routing to us.
+		//
+		// NOTE: Kubernetes Liveness Probes MUST explicitly use "-service liveness".
+		// If they use the default (empty string), they will fall into this block and kill the pod during startup.
+		requiredChecksPassed = isReady
+
 	default:
-		s.logger.V(logutil.DEFAULT).Info("gRPC health check requested unknown service", "available-services", []string{LivenessCheckService, ReadinessCheckService, extProcPb.ExternalProcessor_ServiceDesc.ServiceName}, "requested-service", in.Service)
-		return &healthPb.HealthCheckResponse{Status: healthPb.HealthCheckResponse_SERVICE_UNKNOWN}, nil
+		// Unknown service names should result in a specific gRPC error code, per spec.
+		return &healthPb.HealthCheckResponse{
+			Status: healthPb.HealthCheckResponse_SERVICE_UNKNOWN,
+		}, nil
 	}
 
-	if !isPassing {
-		s.logger.V(logutil.DEFAULT).Info(fmt.Sprintf("gRPC %s check not serving", checkName), "service", in.Service, "isLive", isLive, "isLeader", s.isLeader.Load())
-		return &healthPb.HealthCheckResponse{Status: healthPb.HealthCheckResponse_NOT_SERVING}, nil
+	if !requiredChecksPassed {
+		s.logger.V(logutil.DEFAULT).Info("Health check failing",
+			"service", in.Service,
+			"isLeader", isLeader,
+			"isSynced", isSynced,
+			"electionEnabled", s.leaderElectionEnabled)
+
+		return &healthPb.HealthCheckResponse{
+			Status: healthPb.HealthCheckResponse_NOT_SERVING,
+		}, nil
 	}
 
-	s.logger.V(logutil.TRACE).Info(fmt.Sprintf("gRPC %s check serving", checkName), "service", in.Service)
-	return &healthPb.HealthCheckResponse{Status: healthPb.HealthCheckResponse_SERVING}, nil
+	s.logger.V(logutil.TRACE).Info("Health check passing", "service", in.Service)
+
+	return &healthPb.HealthCheckResponse{
+		Status: healthPb.HealthCheckResponse_SERVING,
+	}, nil
 }
 
+// List implements the optional Health V1 extension to list all services and their status.
+// This is primarily useful for manual debugging via grpcurl.
 func (s *healthServer) List(ctx context.Context, _ *healthPb.HealthListRequest) (*healthPb.HealthListResponse, error) {
-	statuses := make(map[string]*healthPb.HealthCheckResponse)
-
-	services := []string{extProcPb.ExternalProcessor_ServiceDesc.ServiceName}
-	if s.leaderElectionEnabled {
-		services = append(services, LivenessCheckService, ReadinessCheckService)
+	// Define the list of services we know about.
+	knownServices := []string{
+		"", // Overall health
+		livenessService,
+		readinessService,
+		extProcPb.ExternalProcessor_ServiceDesc.ServiceName,
 	}
 
-	for _, service := range services {
+	statuses := make(map[string]*healthPb.HealthCheckResponse)
+
+	for _, service := range knownServices {
 		resp, err := s.Check(ctx, &healthPb.HealthCheckRequest{Service: service})
 		if err != nil {
-			// Check can return an error for unknown services, but here we are iterating known services.
-			// If another error occurs, we should probably return it.
-			return nil, err
+			// Check logic doesn't return errors for internal failures, only for unknown services.
+			// Since we are iterating known services, this shouldn't happen.
+			s.logger.Error(err, "Internal error checking health during List", "service", service)
+			continue
 		}
 		statuses[service] = resp
 	}
@@ -117,6 +143,8 @@ func (s *healthServer) List(ctx context.Context, _ *healthPb.HealthListRequest) 
 	}, nil
 }
 
-func (s *healthServer) Watch(in *healthPb.HealthCheckRequest, srv healthPb.Health_WatchServer) error {
+// Watch is required by the interface but not implemented.
+// Kubelet generally uses unary Check, not streaming Watch.
+func (s *healthServer) Watch(_ *healthPb.HealthCheckRequest, _ healthPb.Health_WatchServer) error {
 	return status.Error(codes.Unimplemented, "Watch is not implemented")
 }

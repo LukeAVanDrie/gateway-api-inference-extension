@@ -14,20 +14,21 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package saturationdetector
+package staticthreshold
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr"
+	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/types"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 )
 
+// newMockPodMetrics is a helper to create fake metrics for testing.
 func newMockPodMetrics(name string, metrics *backendmetrics.MetricsState) *backendmetrics.FakePodMetrics {
 	return &backendmetrics.FakePodMetrics{
 		Pod: &backend.Pod{
@@ -37,27 +38,27 @@ func newMockPodMetrics(name string, metrics *backendmetrics.MetricsState) *backe
 	}
 }
 
-// --- Tests ---
+func TestController_ShouldDispatch(t *testing.T) {
+	t.Parallel()
 
-func TestDetector_IsSaturated(t *testing.T) {
 	baseTime := time.Now()
 	defaultConfig := &Config{
-		QueueDepthThreshold:       5,
-		KVCacheUtilThreshold:      0.90,
-		MetricsStalenessThreshold: 100 * time.Millisecond,
+		queueDepthThreshold:       5,
+		kvCacheUtilThreshold:      0.90,
+		metricsStalenessThreshold: 100 * time.Millisecond,
 	}
 
 	tests := []struct {
-		name               string
-		config             *Config
-		pods               []backendmetrics.PodMetrics
-		expectedSaturation bool
+		name           string
+		config         *Config
+		pods           []backendmetrics.PodMetrics
+		shouldDispatch bool
 	}{
 		{
-			name:               "No candidate pods",
-			config:             defaultConfig,
-			pods:               []backendmetrics.PodMetrics{},
-			expectedSaturation: true, // No capacity = saturated
+			name:           "No candidate pods",
+			config:         defaultConfig,
+			pods:           []backendmetrics.PodMetrics{},
+			shouldDispatch: false, // 0 Capacity = Do not dispatch
 		},
 		{
 			name:   "Single pod with good capacity",
@@ -69,7 +70,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 					KVCacheUsagePercent: 0.5,
 				}),
 			},
-			expectedSaturation: false,
+			shouldDispatch: true,
 		},
 		{
 			name:   "Single pod with stale metrics",
@@ -81,7 +82,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 					KVCacheUsagePercent: 0.1,
 				}),
 			},
-			expectedSaturation: true,
+			shouldDispatch: false,
 		},
 		{
 			name:   "Single pod with high queue depth",
@@ -93,7 +94,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 					KVCacheUsagePercent: 0.1,
 				}),
 			},
-			expectedSaturation: true,
+			shouldDispatch: false,
 		},
 		{
 			name:   "Single pod with high KV cache utilization",
@@ -105,7 +106,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 					KVCacheUsagePercent: 0.95, // Exceeds threshold 0.90
 				}),
 			},
-			expectedSaturation: true,
+			shouldDispatch: false,
 		},
 		{
 			name:   "Single pod with nil metrics",
@@ -113,7 +114,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 			pods: []backendmetrics.PodMetrics{
 				newMockPodMetrics("pod1", nil),
 			},
-			expectedSaturation: true,
+			shouldDispatch: false,
 		},
 		{
 			name:   "Multiple pods, all good capacity",
@@ -130,7 +131,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 					KVCacheUsagePercent: 0.2,
 				}),
 			},
-			expectedSaturation: false,
+			shouldDispatch: true,
 		},
 		{
 			name:   "Multiple pods, one good, one bad (stale)",
@@ -147,7 +148,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 					KVCacheUsagePercent: 0.2,
 				}),
 			},
-			expectedSaturation: false, // One good pod is enough
+			shouldDispatch: true, // One good pod is enough
 		},
 		{
 			name:   "Multiple pods, one good, one bad (high queue)",
@@ -164,7 +165,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 					KVCacheUsagePercent: 0.2,
 				}),
 			},
-			expectedSaturation: false,
+			shouldDispatch: true,
 		},
 		{
 			name:   "Multiple pods, all bad capacity",
@@ -186,7 +187,7 @@ func TestDetector_IsSaturated(t *testing.T) {
 					KVCacheUsagePercent: 0.99, // High KV
 				}),
 			},
-			expectedSaturation: true,
+			shouldDispatch: false,
 		},
 		{
 			name:   "Queue depth exactly at threshold",
@@ -194,11 +195,11 @@ func TestDetector_IsSaturated(t *testing.T) {
 			pods: []backendmetrics.PodMetrics{
 				newMockPodMetrics("pod1", &backendmetrics.MetricsState{
 					UpdateTime:          baseTime,
-					WaitingQueueSize:    defaultConfig.QueueDepthThreshold, // Exactly at threshold (good)
+					WaitingQueueSize:    defaultConfig.queueDepthThreshold, // Exactly at threshold (good)
 					KVCacheUsagePercent: 0.1,
 				}),
 			},
-			expectedSaturation: false,
+			shouldDispatch: true,
 		},
 		{
 			name:   "KV cache exactly at threshold",
@@ -207,32 +208,31 @@ func TestDetector_IsSaturated(t *testing.T) {
 				newMockPodMetrics("pod1", &backendmetrics.MetricsState{
 					UpdateTime:          baseTime,
 					WaitingQueueSize:    1,
-					KVCacheUsagePercent: defaultConfig.KVCacheUtilThreshold, // Exactly at threshold (good)
+					KVCacheUsagePercent: defaultConfig.kvCacheUtilThreshold, // Exactly at threshold (good)
 				}),
 			},
-			expectedSaturation: false,
+			shouldDispatch: true,
 		},
 		{
 			name:   "Metrics age just over staleness threshold",
 			config: defaultConfig,
 			pods: []backendmetrics.PodMetrics{
 				newMockPodMetrics("pod1", &backendmetrics.MetricsState{
-					UpdateTime:          baseTime.Add(-defaultConfig.MetricsStalenessThreshold - time.Nanosecond), // Just over (stale)
+					UpdateTime:          baseTime.Add(-defaultConfig.metricsStalenessThreshold - time.Nanosecond), // Just over (stale)
 					WaitingQueueSize:    1,
 					KVCacheUsagePercent: 0.1,
 				}),
 			},
-			expectedSaturation: true,
+			shouldDispatch: false,
 		},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			detector := NewDetector(test.config, logr.Discard())
-
-			if got := detector.IsSaturated(context.Background(), test.pods); got != test.expectedSaturation {
-				t.Errorf("IsSaturated() = %v, want %v", got, test.expectedSaturation)
-			}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			controller := NewController("test-controller", tc.config)
+			got := controller.ShouldDispatch(context.Background(), tc.pods)
+			assert.Equal(t, tc.shouldDispatch, got)
 		})
 	}
 }

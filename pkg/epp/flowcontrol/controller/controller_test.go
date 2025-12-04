@@ -44,6 +44,7 @@ import (
 	frameworkmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/mocks"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	typesmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types/mocks"
+	satctrl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationcontroller/framework"
 )
 
 // --- Test Harness & Fixtures ---
@@ -77,9 +78,9 @@ type testHarness struct {
 	fc  *FlowController
 	cfg Config
 	// clock is the clock interface used by the controller.
-	clock        clock.WithTicker
-	mockRegistry *mockRegistryClient
-	mockDetector *mocks.MockSaturationDetector
+	clock                    clock.WithTicker
+	mockRegistry             *mockRegistryClient
+	mockSaturationController *mocks.MockSaturationController
 	// mockClock provides access to FakeClock methods (Step, HasWaiters) if and only if the underlying clock is a
 	// FakeClock.
 	mockClock            *testclock.FakeClock
@@ -90,7 +91,7 @@ type testHarness struct {
 // controller's logic. It starts the controller's run loop using the provided context for lifecycle management.
 func newUnitHarness(t *testing.T, ctx context.Context, cfg Config, registry *mockRegistryClient) *testHarness {
 	t.Helper()
-	mockDetector := &mocks.MockSaturationDetector{}
+	mockSaturationController := &mocks.MockSaturationController{ShouldDispatchV: true}
 
 	// Initialize the FakeClock with the current system time.
 	// The controller implementation uses the injected clock to calculate the deadline timestamp,vbut uses the standard
@@ -113,17 +114,17 @@ func newUnitHarness(t *testing.T, ctx context.Context, cfg Config, registry *moc
 		withClock(mockClock),
 		withShardProcessorFactory(mockProcessorFactory.new),
 	}
-	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, logr.Discard(), opts...)
+	fc, err := NewFlowController(ctx, cfg, registry, mockSaturationController, logr.Discard(), opts...)
 	require.NoError(t, err, "failed to create FlowController for unit test harness")
 
 	h := &testHarness{
-		fc:                   fc,
-		cfg:                  cfg,
-		clock:                mockClock,
-		mockRegistry:         registry,
-		mockDetector:         mockDetector,
-		mockClock:            mockClock,
-		mockProcessorFactory: mockProcessorFactory,
+		fc:                       fc,
+		cfg:                      cfg,
+		clock:                    mockClock,
+		mockRegistry:             registry,
+		mockSaturationController: mockSaturationController,
+		mockClock:                mockClock,
+		mockProcessorFactory:     mockProcessorFactory,
 	}
 	return h
 }
@@ -132,9 +133,9 @@ func newUnitHarness(t *testing.T, ctx context.Context, cfg Config, registry *moc
 // validating the controller-processor interaction.
 func newIntegrationHarness(t *testing.T, ctx context.Context, cfg Config, registry *mockRegistryClient) *testHarness {
 	t.Helper()
-	mockDetector := &mocks.MockSaturationDetector{}
-	// Align FakeClock with system time. See explanation in newUnitHarness.
+	mockSaturationController := &mocks.MockSaturationController{ShouldDispatchV: true}
 
+	// Align FakeClock with system time. See explanation in newUnitHarness.
 	mockClock := testclock.NewFakeClock(time.Now())
 	if registry == nil {
 		registry = &mockRegistryClient{}
@@ -144,16 +145,16 @@ func newIntegrationHarness(t *testing.T, ctx context.Context, cfg Config, regist
 		withRegistryClient(registry),
 		withClock(mockClock),
 	}
-	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, logr.Discard(), opts...)
+	fc, err := NewFlowController(ctx, cfg, registry, mockSaturationController, logr.Discard(), opts...)
 	require.NoError(t, err, "failed to create FlowController for integration test harness")
 
 	h := &testHarness{
-		fc:           fc,
-		cfg:          cfg,
-		clock:        mockClock,
-		mockRegistry: registry,
-		mockDetector: mockDetector,
-		mockClock:    mockClock,
+		fc:                       fc,
+		cfg:                      cfg,
+		clock:                    mockClock,
+		mockRegistry:             registry,
+		mockSaturationController: mockSaturationController,
+		mockClock:                mockClock,
 	}
 	return h
 }
@@ -246,7 +247,7 @@ type mockShardProcessorFactory struct {
 func (f *mockShardProcessorFactory) new(
 	_ context.Context, // The factory does not use the lifecycle context; it's passed to the processor's Run method later.
 	shard contracts.RegistryShard,
-	_ contracts.SaturationDetector,
+	_ satctrl.SaturationController,
 	_ clock.WithTicker,
 	_ time.Duration,
 	_ int,
@@ -1000,7 +1001,7 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 		h.fc.shardProcessorFactory = func(
 			ctx context.Context, // The context created by getOrStartWorker for the potential new processor.
 			shard contracts.RegistryShard,
-			_ contracts.SaturationDetector,
+			_ satctrl.SaturationController,
 			_ clock.WithTicker,
 			_ time.Duration,
 			_ int,
