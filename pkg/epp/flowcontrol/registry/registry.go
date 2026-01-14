@@ -77,6 +77,11 @@ type flowState struct {
 	// This prevents race conditions where multiple concurrent requests might attempt to provision the same flow
 	// simultaneously.
 	initialized sync.Once
+
+	// initErr persists the error returned by the initialization logic.
+	// This ensures that concurrent requests accessing the flow after the Once block has completed can still verify if the
+	// initialization succeeded.
+	initErr error
 }
 
 // FlowRegistry is the concrete implementation of the contracts.FlowRegistry interface.
@@ -205,16 +210,17 @@ func (fr *FlowRegistry) WithConnection(key types.FlowKey, fn func(conn contracts
 	// 2. JIT provisioning: Ensure physical resources exist on shards.
 	// We use sync.Once to ensure we only pay the initialization cost (building components, locking shards) exactly once
 	// per flowState object.
-	var jitErr error
 	state.initialized.Do(func() {
-		jitErr = fr.ensureFlowInfrastructure(key)
+		state.initErr = fr.ensureFlowInfrastructure(key)
 	})
 
-	if jitErr != nil {
+	if state.initErr != nil {
 		// If provisioning failed, this state object is invalid.
 		// We remove it from the map so that subsequent requests will attempt to create a fresh state object.
 		fr.flowStates.Delete(key)
-		return fmt.Errorf("failed to provision JIT flow resources: %w", jitErr)
+		// Explicitly clean up any partial resources created on shards.
+		fr.cleanupFlowResources([]types.FlowKey{key})
+		return fmt.Errorf("failed to provision JIT flow resources: %w", state.initErr)
 	}
 
 	// 3. Execute callback.
