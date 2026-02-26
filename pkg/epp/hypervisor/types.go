@@ -53,6 +53,13 @@ type CommitReceipt struct {
 	Epoch      uint64
 }
 
+// struct and unpack config.
+type EndpointConfig struct {
+	Limits            *ResourceVector
+	TotalKVBlocks     *int64
+	MaxActiveRequests *int64
+}
+
 // TokenLedger is the central registry integrating O(1) global estimations with O(N) localized
 // cache-aware scheduling vectors.
 // It acts as the primary admission controller mediating request-level routing vs node capacities.
@@ -82,15 +89,9 @@ type TokenLedger interface {
 	// capacity hallucinations during scraping intervals.
 	ReleaseEndpointCapacity(endpointID string, receipt *CommitReceipt)
 
-	// UpdateEndpointLimits pushes updated total limit vectors from hypervisor polling logic.
-	// This dictates the topological bounds of the routing grid.
-	UpdateEndpointLimits(endpointID string, newLimits ResourceVector)
-
-	// UpdateEndpointKVBlocks propagates newly scraped physical KV Cache capacities.
-	UpdateEndpointKVBlocks(endpointID string, totalKVBlocks int64)
-
-	// UpdateEndpointActiveRequests propagates newly scraped rigid concurrency capacities.
-	UpdateEndpointActiveRequests(endpointID string, maxActiveRequests int64)
+	// UpdateEndpointConfig pushes updated state configurations to securely adjust endpoints limits,
+	// max concurrent sequences, and cache blocks.
+	UpdateEndpointConfig(endpointID string, cfg EndpointConfig)
 
 	// RemoveEndpoint safely unregisters a pod from the hypervisor and purget its usage vectors from
 	// the aggregate pools.

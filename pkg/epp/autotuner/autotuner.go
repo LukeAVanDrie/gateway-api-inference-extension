@@ -102,7 +102,7 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 
 				// Push the reset limits to the ledger so the Gateway stops admitting at the old high-water
 				// mark.
-				t.ledger.UpdateEndpointLimits(t.endpointID, t.currentLimits)
+				t.ledger.UpdateEndpointConfig(t.endpointID, hypervisor.EndpointConfig{Limits: &t.currentLimits})
 			}
 		}
 		return // Silently wait for traffic.
@@ -212,7 +212,7 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 	}
 
 	if newLimits != t.currentLimits {
-		t.ledger.UpdateEndpointLimits(t.endpointID, newLimits)
+		t.ledger.UpdateEndpointConfig(t.endpointID, hypervisor.EndpointConfig{Limits: &newLimits})
 		t.currentLimits = newLimits
 	}
 }

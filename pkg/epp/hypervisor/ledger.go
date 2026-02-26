@@ -266,47 +266,38 @@ func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *Comm
 	}
 }
 
-// UpdateEndpointLimits modifies high benchmarks to scale topology dimensions.
-func (l *TwoTierLedger) UpdateEndpointLimits(endpointID string, newLimits ResourceVector) {
+// UpdateEndpointConfig modifies high benchmarks to scale topology dimensions.
+func (l *TwoTierLedger) UpdateEndpointConfig(endpointID string, cfg EndpointConfig) {
 	value, ok := l.endpointLedgers.Load(endpointID)
 	if !ok {
 		value, _ = l.endpointLedgers.LoadOrStore(endpointID, &endpointLedger{})
 	}
 	endpoint := value.(*endpointLedger)
 
-	oldPrefill := endpoint.limit.PrefillTokens.Swap(newLimits.PrefillTokens)
-	oldDecode := endpoint.limit.DecodeTokens.Swap(newLimits.DecodeTokens)
-	oldKV := endpoint.limit.KVBlocks.Swap(newLimits.KVBlocks)
-	oldActive := endpoint.limit.ActiveRequests.Swap(newLimits.ActiveRequests)
+	endpoint.mu.Lock()
+	defer endpoint.mu.Unlock()
 
-	l.globalLimit.PrefillTokens.Add(newLimits.PrefillTokens - oldPrefill)
-	l.globalLimit.DecodeTokens.Add(newLimits.DecodeTokens - oldDecode)
-	l.globalLimit.KVBlocks.Add(newLimits.KVBlocks - oldKV)
-	l.globalLimit.ActiveRequests.Add(newLimits.ActiveRequests - oldActive)
-}
+	if cfg.Limits != nil {
+		oldPrefill := endpoint.limit.PrefillTokens.Swap(cfg.Limits.PrefillTokens)
+		oldDecode := endpoint.limit.DecodeTokens.Swap(cfg.Limits.DecodeTokens)
+		oldKV := endpoint.limit.KVBlocks.Swap(cfg.Limits.KVBlocks)
+		oldActive := endpoint.limit.ActiveRequests.Swap(cfg.Limits.ActiveRequests)
 
-// UpdateEndpointKVBlocks propagates newly scraped physical KV Cache capacities.
-func (l *TwoTierLedger) UpdateEndpointKVBlocks(endpointID string, totalKVBlocks int64) {
-	value, ok := l.endpointLedgers.Load(endpointID)
-	if !ok {
-		value, _ = l.endpointLedgers.LoadOrStore(endpointID, &endpointLedger{})
+		l.globalLimit.PrefillTokens.Add(cfg.Limits.PrefillTokens - oldPrefill)
+		l.globalLimit.DecodeTokens.Add(cfg.Limits.DecodeTokens - oldDecode)
+		l.globalLimit.KVBlocks.Add(cfg.Limits.KVBlocks - oldKV)
+		l.globalLimit.ActiveRequests.Add(cfg.Limits.ActiveRequests - oldActive)
 	}
-	endpoint := value.(*endpointLedger)
 
-	oldKV := endpoint.limit.KVBlocks.Swap(totalKVBlocks)
-	l.globalLimit.KVBlocks.Add(totalKVBlocks - oldKV)
-}
-
-// UpdateEndpointActiveRequests propagates newly scraped rigid concurrency capacities.
-func (l *TwoTierLedger) UpdateEndpointActiveRequests(endpointID string, maxActiveRequests int64) {
-	value, ok := l.endpointLedgers.Load(endpointID)
-	if !ok {
-		value, _ = l.endpointLedgers.LoadOrStore(endpointID, &endpointLedger{})
+	if cfg.TotalKVBlocks != nil {
+		oldKV := endpoint.limit.KVBlocks.Swap(*cfg.TotalKVBlocks)
+		l.globalLimit.KVBlocks.Add(*cfg.TotalKVBlocks - oldKV)
 	}
-	endpoint := value.(*endpointLedger)
 
-	oldActive := endpoint.limit.ActiveRequests.Swap(maxActiveRequests)
-	l.globalLimit.ActiveRequests.Add(maxActiveRequests - oldActive)
+	if cfg.MaxActiveRequests != nil {
+		oldActive := endpoint.limit.ActiveRequests.Swap(*cfg.MaxActiveRequests)
+		l.globalLimit.ActiveRequests.Add(*cfg.MaxActiveRequests - oldActive)
+	}
 }
 
 // ReconcileEndpointCapacity incorporates official real-time state via a polled baseline overwrite.

@@ -174,6 +174,7 @@ func (t *TelemetryBridge) Extract(ctx context.Context, data any, ep fwkdl.Endpoi
 	totalKVBlocks := state.autoTuner.GetKVBlocks()
 	maxActiveRequests := getFloatValue(attr, AttrMaxNumSeqs)
 
+	cfg := EndpointConfig{}
 	if metrics := ep.GetMetrics(); metrics != nil {
 		cacheUsagePer = metrics.KVCacheUsagePercent
 		running = float64(metrics.RunningRequestsSize)
@@ -183,13 +184,18 @@ func (t *TelemetryBridge) Extract(ctx context.Context, data any, ep fwkdl.Endpoi
 		// is determined explicitly via local instantiation.
 		if metrics.CacheNumGPUBlocks > 0 {
 			totalKVBlocks = int64(metrics.CacheNumGPUBlocks)
-			t.ledger.UpdateEndpointKVBlocks(state.endpointID, totalKVBlocks)
+			cfg.TotalKVBlocks = &totalKVBlocks
 			state.autoTuner.SetKVBlocks(totalKVBlocks)
 		}
 	}
 
 	if maxActiveRequests > 0 {
-		t.ledger.UpdateEndpointActiveRequests(state.endpointID, int64(maxActiveRequests))
+		maxActiveRequestsInt := int64(maxActiveRequests)
+		cfg.MaxActiveRequests = &maxActiveRequestsInt
+	}
+
+	if cfg.TotalKVBlocks != nil || cfg.MaxActiveRequests != nil {
+		t.ledger.UpdateEndpointConfig(state.endpointID, cfg)
 	}
 
 	// Calculate the instantaneous ResourceVector.
