@@ -100,6 +100,12 @@ type TokenLedger interface {
 	// ReconcileEndpointCapacity incorporates authoritative real-time state via a polled baseline
 	// overwrite, propagating deltas synchronously upwards to the aggregate view.
 	ReconcileEndpointCapacity(endpointID string, scrapedUsage ResourceVector)
+
+	// GetGlobalHold returns the current active worldwide conservative reservation vector.
+	GetGlobalHold() ResourceVector
+
+	// GetEndpointSnapshot returns localized endpoint vectors for Prometheus scrape visualization.
+	GetEndpointSnapshot(endpointID string) (limits, committed, scraped ResourceVector, ok bool)
 }
 
 var (

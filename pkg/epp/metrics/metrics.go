@@ -32,9 +32,10 @@ import (
 
 const (
 	// --- Subsystems ---
-	inferenceObjectiveComponent = "inference_objective"
-	inferencePoolComponent      = "inference_pool"
-	inferenceExtension          = "inference_extension"
+	inferenceObjectiveComponent  = "inference_objective"
+	inferencePoolComponent       = "inference_pool"
+	inferenceExtension           = "inference_extension"
+	inferenceHypervisorComponent = "hypervisor"
 
 	// Metric Type Values
 	typeTPOT                   = "tpot"
@@ -55,6 +56,7 @@ var (
 	modelLabels     = []string{"model_name", "target_model_name"}
 	modelTypeLabels = []string{"model_name", "target_model_name", "type"}
 	poolLabels      = []string{"name"}
+	endpointLabels  = []string{"endpoint"}
 
 	// --- Common Buckets ---
 
@@ -300,6 +302,165 @@ var (
 	)
 )
 
+// --- Hypervisor Metrics ---
+var (
+	hypervisorLimitKVBlocks = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "limit_kv_blocks",
+			Help:      metricsutil.HelpMsgWithStability("Maximum physical capacity of KV blocks for an endpoint.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorLimitActiveRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "limit_active_requests",
+			Help:      metricsutil.HelpMsgWithStability("Maximum physical capacity of active requests for an endpoint.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorLimitPrefillTokens = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "limit_prefill_tokens",
+			Help:      metricsutil.HelpMsgWithStability("Maximum throughput capacity of prefill tokens per epoch for an endpoint.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorLimitDecodeTokens = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "limit_decode_tokens",
+			Help:      metricsutil.HelpMsgWithStability("Maximum throughput capacity of decode tokens per epoch for an endpoint.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorHoldKVBlocks = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "hold_kv_blocks",
+			Help:      metricsutil.HelpMsgWithStability("Current reserved KV blocks on hold.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorHoldActiveRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "hold_active_requests",
+			Help:      metricsutil.HelpMsgWithStability("Current reserved active requests on hold.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorHoldPrefillTokens = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "hold_prefill_tokens",
+			Help:      metricsutil.HelpMsgWithStability("Current reserved prefill tokens on hold.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorHoldDecodeTokens = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "hold_decode_tokens",
+			Help:      metricsutil.HelpMsgWithStability("Current reserved decode tokens on hold.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorCommittedKVBlocks = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "committed_kv_blocks",
+			Help:      metricsutil.HelpMsgWithStability("Current net-transit committed KV blocks.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorCommittedActiveRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "committed_active_requests",
+			Help:      metricsutil.HelpMsgWithStability("Current net-transit committed active requests.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorCommittedPrefillTokens = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "committed_prefill_tokens",
+			Help:      metricsutil.HelpMsgWithStability("Current net-transit committed prefill tokens.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorCommittedDecodeTokens = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "committed_decode_tokens",
+			Help:      metricsutil.HelpMsgWithStability("Current net-transit committed decode tokens.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorScrapedKVBlocks = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "scraped_kv_blocks",
+			Help:      metricsutil.HelpMsgWithStability("Current actual scraped KV blocks from backend.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorScrapedActiveRequests = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "scraped_active_requests",
+			Help:      metricsutil.HelpMsgWithStability("Current actual scraped active requests from backend.", compbasemetrics.ALPHA),
+		},
+		endpointLabels,
+	)
+
+	hypervisorEstimateKVBlocksDriftRatio = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "estimate_kv_blocks_drift_ratio",
+			Help:      metricsutil.HelpMsgWithStability("Ratio of actual KV blocks used vs predicted.", compbasemetrics.ALPHA),
+			Buckets:   []float64{0.1, 0.25, 0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0},
+		},
+		modelLabels,
+	)
+
+	hypervisorEstimatePrefillTokensDriftRatio = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "estimate_prefill_tokens_drift_ratio",
+			Help:      metricsutil.HelpMsgWithStability("Ratio of actual prefill tokens used vs predicted.", compbasemetrics.ALPHA),
+			Buckets:   []float64{0.1, 0.25, 0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0},
+		},
+		modelLabels,
+	)
+
+	hypervisorEstimateDecodeTokensDriftRatio = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Subsystem: inferenceHypervisorComponent,
+			Name:      "estimate_decode_tokens_drift_ratio",
+			Help:      metricsutil.HelpMsgWithStability("Ratio of actual decode tokens generated vs predicted.", compbasemetrics.ALPHA),
+			Buckets:   []float64{0.1, 0.25, 0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0},
+		},
+		modelLabels,
+	)
+)
+
 // --- Scheduling Metrics ---
 var (
 	schedulerE2ELatency = prometheus.NewHistogramVec(
@@ -474,6 +635,23 @@ func Register(customCollectors ...prometheus.Collector) {
 		metrics.Registry.MustRegister(runningRequests)
 		metrics.Registry.MustRegister(normalizedTimePerOutputToken)
 		metrics.Registry.MustRegister(inferencePoolAvgKVCache)
+		metrics.Registry.MustRegister(hypervisorLimitKVBlocks)
+		metrics.Registry.MustRegister(hypervisorLimitActiveRequests)
+		metrics.Registry.MustRegister(hypervisorLimitPrefillTokens)
+		metrics.Registry.MustRegister(hypervisorLimitDecodeTokens)
+		metrics.Registry.MustRegister(hypervisorHoldKVBlocks)
+		metrics.Registry.MustRegister(hypervisorHoldActiveRequests)
+		metrics.Registry.MustRegister(hypervisorHoldPrefillTokens)
+		metrics.Registry.MustRegister(hypervisorHoldDecodeTokens)
+		metrics.Registry.MustRegister(hypervisorCommittedKVBlocks)
+		metrics.Registry.MustRegister(hypervisorCommittedActiveRequests)
+		metrics.Registry.MustRegister(hypervisorCommittedPrefillTokens)
+		metrics.Registry.MustRegister(hypervisorCommittedDecodeTokens)
+		metrics.Registry.MustRegister(hypervisorScrapedKVBlocks)
+		metrics.Registry.MustRegister(hypervisorScrapedActiveRequests)
+		metrics.Registry.MustRegister(hypervisorEstimateKVBlocksDriftRatio)
+		metrics.Registry.MustRegister(hypervisorEstimatePrefillTokensDriftRatio)
+		metrics.Registry.MustRegister(hypervisorEstimateDecodeTokensDriftRatio)
 		metrics.Registry.MustRegister(inferencePoolAvgQueueSize)
 		metrics.Registry.MustRegister(inferencePoolReadyPods)
 		metrics.Registry.MustRegister(schedulerE2ELatency)
@@ -523,6 +701,23 @@ func Reset() {
 	runningRequests.Reset()
 	normalizedTimePerOutputToken.Reset()
 	inferencePoolAvgKVCache.Reset()
+	hypervisorLimitKVBlocks.Reset()
+	hypervisorLimitActiveRequests.Reset()
+	hypervisorLimitPrefillTokens.Reset()
+	hypervisorLimitDecodeTokens.Reset()
+	hypervisorHoldKVBlocks.Reset()
+	hypervisorHoldActiveRequests.Reset()
+	hypervisorHoldPrefillTokens.Reset()
+	hypervisorHoldDecodeTokens.Reset()
+	hypervisorCommittedKVBlocks.Reset()
+	hypervisorCommittedActiveRequests.Reset()
+	hypervisorCommittedPrefillTokens.Reset()
+	hypervisorCommittedDecodeTokens.Reset()
+	hypervisorScrapedKVBlocks.Reset()
+	hypervisorScrapedActiveRequests.Reset()
+	hypervisorEstimateKVBlocksDriftRatio.Reset()
+	hypervisorEstimatePrefillTokensDriftRatio.Reset()
+	hypervisorEstimateDecodeTokensDriftRatio.Reset()
 	inferencePoolAvgQueueSize.Reset()
 	inferencePoolReadyPods.Reset()
 	schedulerE2ELatency.Reset()
@@ -741,6 +936,67 @@ func IncRunningRequests(modelName string) {
 func DecRunningRequests(modelName string) {
 	if modelName != "" {
 		runningRequests.WithLabelValues(modelName).Dec()
+	}
+}
+
+func SetHypervisorLimitKVBlocks(endpoint string, val float64) {
+	hypervisorLimitKVBlocks.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorLimitActiveRequests(endpoint string, val float64) {
+	hypervisorLimitActiveRequests.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorLimitPrefillTokens(endpoint string, val float64) {
+	hypervisorLimitPrefillTokens.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorLimitDecodeTokens(endpoint string, val float64) {
+	hypervisorLimitDecodeTokens.WithLabelValues(endpoint).Set(val)
+}
+
+func SetHypervisorHoldKVBlocks(endpoint string, val float64) {
+	hypervisorHoldKVBlocks.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorHoldActiveRequests(endpoint string, val float64) {
+	hypervisorHoldActiveRequests.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorHoldPrefillTokens(endpoint string, val float64) {
+	hypervisorHoldPrefillTokens.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorHoldDecodeTokens(endpoint string, val float64) {
+	hypervisorHoldDecodeTokens.WithLabelValues(endpoint).Set(val)
+}
+
+func SetHypervisorCommittedKVBlocks(endpoint string, val float64) {
+	hypervisorCommittedKVBlocks.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorCommittedActiveRequests(endpoint string, val float64) {
+	hypervisorCommittedActiveRequests.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorCommittedPrefillTokens(endpoint string, val float64) {
+	hypervisorCommittedPrefillTokens.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorCommittedDecodeTokens(endpoint string, val float64) {
+	hypervisorCommittedDecodeTokens.WithLabelValues(endpoint).Set(val)
+}
+
+func SetHypervisorScrapedKVBlocks(endpoint string, val float64) {
+	hypervisorScrapedKVBlocks.WithLabelValues(endpoint).Set(val)
+}
+func SetHypervisorScrapedActiveRequests(endpoint string, val float64) {
+	hypervisorScrapedActiveRequests.WithLabelValues(endpoint).Set(val)
+}
+
+func RecordHypervisorDrift(endpoint string, actual, predicted float64, vectorType string) {
+	if predicted <= 0 {
+		return
+	}
+	ratio := actual / predicted
+	switch vectorType {
+	case "kv_blocks":
+		hypervisorEstimateKVBlocksDriftRatio.WithLabelValues(endpoint).Observe(ratio)
+	case "prefill_tokens":
+		hypervisorEstimatePrefillTokensDriftRatio.WithLabelValues(endpoint).Observe(ratio)
+	case "decode_tokens":
+		hypervisorEstimateDecodeTokensDriftRatio.WithLabelValues(endpoint).Observe(ratio)
 	}
 }
 

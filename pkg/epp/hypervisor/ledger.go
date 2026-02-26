@@ -366,3 +366,34 @@ func (l *TwoTierLedger) RemoveEndpoint(endpointID string) {
 	}
 	endpoint.mu.Unlock()
 }
+
+func (l *TwoTierLedger) GetGlobalHold() ResourceVector {
+	return l.globalHold.load()
+}
+
+func (l *TwoTierLedger) GetEndpointSnapshot(endpointID string) (limits, committed, scraped ResourceVector, ok bool) {
+	value, exists := l.endpointLedgers.Load(endpointID)
+	if !exists {
+		return ResourceVector{}, ResourceVector{}, ResourceVector{}, false
+	}
+	endpoint := value.(*endpointLedger)
+
+	limits = endpoint.limit.load()
+	scraped = endpoint.scrapedBaseline.load()
+
+	endpoint.mu.Lock()
+	// Only sum transit buckets that haven't expired beyond the temporal netting window.
+	// We aggregate the entire array since obsolete buckets are actively zeroed by the master tick.
+	for i := range 3 {
+		committed.KVBlocks += endpoint.transitBuckets[i].KVBlocks
+		committed.ActiveRequests += endpoint.transitBuckets[i].ActiveRequests
+	}
+	endpoint.mu.Unlock()
+
+	// Throughput accounting has no transit debt logic - Commits immediately deduct from dynamic state.
+	// But we expose the tracking counters over the endpoint to see throughput utilization history.
+	committed.PrefillTokens = endpoint.endpointTracking.PrefillTokens.Load()
+	committed.DecodeTokens = endpoint.endpointTracking.DecodeTokens.Load()
+
+	return limits, committed, scraped, true
+}

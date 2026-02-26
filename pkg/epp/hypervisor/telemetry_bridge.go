@@ -28,6 +28,7 @@ import (
 	fwkplugin "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/datalayer/extractor/metrics/generic"
 	sourcemetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/datalayer/source/metrics"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 )
 
 // EpochEvaluator abstracts the Auto-Tuner to break the cyclic import dependency.
@@ -179,15 +180,15 @@ func (t *TelemetryBridge) Extract(ctx context.Context, data any, ep fwkdl.Endpoi
 	maxActiveRequests := getFloatValue(attr, AttrMaxNumSeqs)
 
 	cfg := EndpointConfig{}
-	if metrics := ep.GetMetrics(); metrics != nil {
-		cacheUsagePer = metrics.KVCacheUsagePercent
-		running = float64(metrics.RunningRequestsSize)
+	if epMetrics := ep.GetMetrics(); epMetrics != nil {
+		cacheUsagePer = epMetrics.KVCacheUsagePercent
+		running = float64(epMetrics.RunningRequestsSize)
 
 		// Propagate rigid physical boundaries directly into the Ledger.
 		// The Autotuner handles dynamic scaling of compute limits, but Physical Storage capacity
 		// is determined explicitly via local instantiation.
-		if metrics.CacheNumGPUBlocks > 0 {
-			totalKVBlocks = int64(metrics.CacheNumGPUBlocks)
+		if epMetrics.CacheNumGPUBlocks > 0 {
+			totalKVBlocks = int64(epMetrics.CacheNumGPUBlocks)
 			cfg.TotalKVBlocks = &totalKVBlocks
 			state.autoTuner.SetKVBlocks(totalKVBlocks)
 		}
@@ -219,6 +220,42 @@ func (t *TelemetryBridge) Extract(ctx context.Context, data any, ep fwkdl.Endpoi
 	// Auto-Tuner State Machine Update
 	if delta != nil {
 		state.autoTuner.EvaluateEpoch(delta, currentUsage)
+	}
+
+	// Dynamic Metric Snapshotting
+	limits, committed, scraped, ok := t.ledger.GetEndpointSnapshot(endpointID)
+	if ok {
+		metrics.SetHypervisorLimitKVBlocks(endpointID, float64(limits.KVBlocks))
+		metrics.SetHypervisorLimitActiveRequests(endpointID, float64(limits.ActiveRequests))
+		metrics.SetHypervisorLimitPrefillTokens(endpointID, float64(limits.PrefillTokens))
+		metrics.SetHypervisorLimitDecodeTokens(endpointID, float64(limits.DecodeTokens))
+
+		metrics.SetHypervisorCommittedKVBlocks(endpointID, float64(committed.KVBlocks))
+		metrics.SetHypervisorCommittedActiveRequests(endpointID, float64(committed.ActiveRequests))
+		metrics.SetHypervisorCommittedPrefillTokens(endpointID, float64(committed.PrefillTokens))
+		metrics.SetHypervisorCommittedDecodeTokens(endpointID, float64(committed.DecodeTokens))
+
+		metrics.SetHypervisorScrapedKVBlocks(endpointID, float64(scraped.KVBlocks))
+		metrics.SetHypervisorScrapedActiveRequests(endpointID, float64(scraped.ActiveRequests))
+
+		// Record Drift Ratios (Actual / Predicted)
+		if committed.KVBlocks > 0 {
+			metrics.RecordHypervisorDrift(endpointID, float64(scraped.KVBlocks), float64(committed.KVBlocks), "kv_blocks")
+		}
+		if committed.PrefillTokens > 0 {
+			// Proxy estimation vs Hypervisor aggregate reality
+			metrics.RecordHypervisorDrift(endpointID, float64(scraped.PrefillTokens), float64(committed.PrefillTokens), "prefill_tokens")
+		}
+		if committed.DecodeTokens > 0 {
+			metrics.RecordHypervisorDrift(endpointID, float64(scraped.DecodeTokens), float64(committed.DecodeTokens), "decode_tokens")
+		}
+
+		// Push global holds
+		globalHolds := t.ledger.GetGlobalHold()
+		metrics.SetHypervisorHoldKVBlocks("global", float64(globalHolds.KVBlocks))
+		metrics.SetHypervisorHoldActiveRequests("global", float64(globalHolds.ActiveRequests))
+		metrics.SetHypervisorHoldPrefillTokens("global", float64(globalHolds.PrefillTokens))
+		metrics.SetHypervisorHoldDecodeTokens("global", float64(globalHolds.DecodeTokens))
 	}
 
 	return nil
