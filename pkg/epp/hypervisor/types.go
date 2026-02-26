@@ -92,6 +92,10 @@ type TokenLedger interface {
 	// UpdateEndpointActiveRequests propagates newly scraped rigid concurrency capacities.
 	UpdateEndpointActiveRequests(endpointID string, maxActiveRequests int64)
 
+	// RemoveEndpoint safely unregisters a pod from the hypervisor and purget its usage vectors from
+	// the aggregate pools.
+	RemoveEndpoint(endpointID string)
+
 	// ReconcileEndpointCapacity incorporates authoritative real-time state via a polled baseline
 	// overwrite, propagating deltas synchronously upwards to the aggregate view.
 	ReconcileEndpointCapacity(endpointID string, scrapedUsage ResourceVector)

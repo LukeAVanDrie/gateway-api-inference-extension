@@ -317,13 +317,39 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 
 	setupLog.Info("parsed config", "scheduler-config", r.schedulerConfig)
 
-	scheduler := scheduling.NewSchedulerWithConfig(r.schedulerConfig)
+	ledger := &hypervisor.TwoTierLedger{}
+	go ledger.RunMasterTick(ctx)
+
+	bridge := hypervisor.NewTelemetryBridge(ledger)
+
+	// Wrap the metrics factory
+	epf = &TelemetryFacilitator{
+		EndpointFactory: epf,
+		bridge:          bridge,
+	}
 
 	datalayerMetricsEnabled := r.featureGates[datalayer.ExperimentalDatalayerFeatureGate]
 	if err := r.setupDataLayer(datalayerMetricsEnabled, eppConfig.DataConfig, epf, mgr); err != nil {
 		setupLog.Error(err, "failed to initialize data layer")
 		return nil, nil, err
 	}
+
+	go func() {
+		ticker := time.NewTicker(opts.RefreshMetricsInterval) // Match metrics refresh window
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				endpoints := ds.PodList(datastore.AllPodsPredicate)
+				bridge.Reconcile(endpoints)
+			}
+		}
+	}()
+
+	scheduler := scheduling.NewSchedulerWithConfig(r.schedulerConfig)
+
 
 	saturationDetector := utilizationdetector.NewDetector(eppConfig.SaturationDetectorConfig, setupLog)
 
@@ -641,6 +667,25 @@ func (r *Runner) setupDataLayer(enableNewMetrics bool, cfg *datalayer.Config,
 	}
 	return nil
 }
+
+type TelemetryFacilitator struct {
+	datalayer.EndpointFactory
+	bridge *hypervisor.TelemetryBridge
+}
+
+func (t *TelemetryFacilitator) NewEndpoint(ctx context.Context, meta *fwkdl.EndpointMetadata, info datalayer.PoolInfo) fwkdl.Endpoint {
+	ep := t.EndpointFactory.NewEndpoint(ctx, meta, info)
+	if ep != nil {
+		t.bridge.RegisterEndpoint(ep.GetMetadata().NamespacedName.String(), &datalayer.PodDeltaEngine{}, nil)
+	}
+	return ep
+}
+
+func (t *TelemetryFacilitator) ReleaseEndpoint(ep fwkdl.Endpoint) {
+	t.bridge.DeregisterEndpoint(ep.GetMetadata().NamespacedName.String())
+	t.EndpointFactory.ReleaseEndpoint(ep)
+}
+
 
 func (r *Runner) setupMetricsCollection(enableNewMetrics bool, opts *runserver.Options, pmc backendmetrics.PodMetricsClient) datalayer.EndpointFactory {
 	if enableNewMetrics {

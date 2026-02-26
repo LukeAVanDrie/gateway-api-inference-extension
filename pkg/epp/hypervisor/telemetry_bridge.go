@@ -84,6 +84,7 @@ func (t *TelemetryBridge) DeregisterEndpoint(endpointID string) {
 	defer t.mu.Unlock()
 
 	delete(t.endpoints, endpointID)
+	t.ledger.RemoveEndpoint(endpointID)
 }
 
 func getFloatValue(attributes fwkdl.AttributeMap, key string) float64 {

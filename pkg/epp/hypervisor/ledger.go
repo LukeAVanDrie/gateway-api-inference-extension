@@ -325,6 +325,39 @@ func (l *TwoTierLedger) ReconcileEndpointCapacity(endpointID string, scrapedUsag
 	l.globalScraped.ActiveRequests.Add(deltaActive)
 }
 
+// RemoveEndpoint safely unregisters a pod from the hypervisor.
+// It subtracts the endpoint's configured limits, active baselines, and ephemeral transit debt
+// from the global aggregate vectors to prevent Flow Control from hallucinating ghost capacity.
+func (l *TwoTierLedger) RemoveEndpoint(endpointID string) {
+	value, loaded := l.endpointLedgers.LoadAndDelete(endpointID)
+	if !loaded {
+		return
+	}
+	endpoint := value.(*endpointLedger)
+
+	// 1. Remove limits from global pool
+	l.globalLimit.PrefillTokens.Add(-endpoint.limit.PrefillTokens.Load())
+	l.globalLimit.DecodeTokens.Add(-endpoint.limit.DecodeTokens.Load())
+	l.globalLimit.KVBlocks.Add(-endpoint.limit.KVBlocks.Load())
+	l.globalLimit.ActiveRequests.Add(-endpoint.limit.ActiveRequests.Load())
+
+	// 2. Remove currently scraped active usage from global pool
+	l.globalScraped.PrefillTokens.Add(-int64(endpoint.scrapedBaseline.PrefillTokens.Load()))
+	l.globalScraped.DecodeTokens.Add(-int64(endpoint.scrapedBaseline.DecodeTokens.Load()))
+	l.globalScraped.KVBlocks.Add(-int64(endpoint.scrapedBaseline.KVBlocks.Load()))
+	l.globalScraped.ActiveRequests.Add(-int64(endpoint.scrapedBaseline.ActiveRequests.Load()))
+
+	// 3. Remove any inflight transit debt from global pool safely
+	endpoint.mu.Lock()
+	for i := range endpoint.transitBuckets {
+		l.globalTransit[i].PrefillTokens.Add(-endpoint.transitBuckets[i].PrefillTokens)
+		l.globalTransit[i].DecodeTokens.Add(-endpoint.transitBuckets[i].DecodeTokens)
+		l.globalTransit[i].KVBlocks.Add(-endpoint.transitBuckets[i].KVBlocks)
+		l.globalTransit[i].ActiveRequests.Add(-endpoint.transitBuckets[i].ActiveRequests)
+	}
+	endpoint.mu.Unlock()
+}
+
 // RecalculateMaxContiguous evaluates all endpoints to find the largest single-endpoint contiguous
 // capacity for each dimension.
 // This should be called exactly once at the end of every 50ms telemetry extraction cycle, directly
