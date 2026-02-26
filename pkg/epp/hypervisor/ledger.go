@@ -100,6 +100,11 @@ func (l *TwoTierLedger) RunMasterTick(ctx context.Context) {
 
 				return true
 			})
+
+			// Pool-Level Finalization
+			// Must be called exactly once per pool iteration to defend against Head-of-Line (HOL)
+			// fragmentation state issues.
+			l.recalculateMaxContiguous()
 		}
 	}
 }
@@ -358,11 +363,9 @@ func (l *TwoTierLedger) RemoveEndpoint(endpointID string) {
 	endpoint.mu.Unlock()
 }
 
-// RecalculateMaxContiguous evaluates all endpoints to find the largest single-endpoint contiguous
+// recalculateMaxContiguous evaluates all endpoints to find the largest single-endpoint contiguous
 // capacity for each dimension.
-// This should be called exactly once at the end of every 50ms telemetry extraction cycle, directly
-// after calling ReconcileEndpointCapacity for all active endpoints.
-func (l *TwoTierLedger) RecalculateMaxContiguous() {
+func (l *TwoTierLedger) recalculateMaxContiguous() {
 	var maxPrefill, maxDecode, maxKV, maxActive int64
 
 	l.endpointLedgers.Range(func(key, value any) bool {

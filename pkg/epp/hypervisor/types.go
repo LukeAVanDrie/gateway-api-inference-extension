@@ -99,9 +99,6 @@ type TokenLedger interface {
 	// ReconcileEndpointCapacity incorporates authoritative real-time state via a polled baseline
 	// overwrite, propagating deltas synchronously upwards to the aggregate view.
 	ReconcileEndpointCapacity(endpointID string, scrapedUsage ResourceVector)
-
-	// RecalculateMaxContiguous evaluates the aggregate cache state.
-	RecalculateMaxContiguous()
 }
 
 var (

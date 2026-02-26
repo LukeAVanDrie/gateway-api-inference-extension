@@ -17,6 +17,7 @@ limitations under the License.
 package hypervisor
 
 import (
+	"context"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/types"
@@ -105,5 +106,6 @@ func TestReconcile(t *testing.T) {
 
 	ep := &mockEndpoint{mockMeta: mockMeta{attr: attr}}
 
-	bridge.Reconcile([]fwkdl.Endpoint{ep})
+	ctx := context.Background()
+	bridge.Extract(ctx, nil, ep)
 }

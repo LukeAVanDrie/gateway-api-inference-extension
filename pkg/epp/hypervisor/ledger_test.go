@@ -30,7 +30,7 @@ func TestRAGBombConcurrency(t *testing.T) {
 	ledger := &TwoTierLedger{}
 	// Initialize ledger with a global KV block limit of 100,000
 	ledger.UpdateEndpointLimits("test-endpoint", ResourceVector{KVBlocks: 100000, ActiveRequests: 100000})
-	ledger.RecalculateMaxContiguous()
+	ledger.recalculateMaxContiguous()
 
 	var wg sync.WaitGroup
 	successCount := atomic.Int64{}
@@ -78,7 +78,7 @@ func TestReleaseHold(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointLimits("test-endpoint", ResourceVector{KVBlocks: 1000})
-	ledger.RecalculateMaxContiguous()
+	ledger.recalculateMaxContiguous()
 
 	// 1. Acquire hold
 	receipt, err := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
@@ -103,7 +103,7 @@ func TestCommitLedger(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointLimits("test-endpoint", ResourceVector{KVBlocks: 1000})
-	ledger.RecalculateMaxContiguous()
+	ledger.recalculateMaxContiguous()
 
 	// 1. Acquire hold
 	receipt, err := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
@@ -140,7 +140,7 @@ func TestReleaseEndpointCapacity(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointLimits("test-endpoint", ResourceVector{KVBlocks: 1000})
-	ledger.RecalculateMaxContiguous()
+	ledger.recalculateMaxContiguous()
 
 	// Commit receipt is necessary for releasing.
 	receipt, _ := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
@@ -158,7 +158,7 @@ func TestReconcileEndpointCapacity(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointLimits("test-endpoint", ResourceVector{KVBlocks: 1000})
-	ledger.RecalculateMaxContiguous()
+	ledger.recalculateMaxContiguous()
 
 	scrapedUsage := ResourceVector{KVBlocks: 150}
 	ledger.ReconcileEndpointCapacity("test-endpoint", scrapedUsage)
@@ -173,7 +173,7 @@ func TestMasterTick(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointLimits("test-endpoint", ResourceVector{KVBlocks: 1000})
-	ledger.RecalculateMaxContiguous()
+	ledger.recalculateMaxContiguous()
 
 	// Initial epoch should be 0 or 1
 	startEpoch := ledger.globalEpoch.Load()

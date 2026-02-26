@@ -329,27 +329,12 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 	}
 
 	datalayerMetricsEnabled := r.featureGates[datalayer.ExperimentalDatalayerFeatureGate]
-	if err := r.setupDataLayer(datalayerMetricsEnabled, eppConfig.DataConfig, epf, mgr); err != nil {
+	if err := r.setupDataLayer(datalayerMetricsEnabled, eppConfig.DataConfig, epf, mgr, bridge); err != nil {
 		setupLog.Error(err, "failed to initialize data layer")
 		return nil, nil, err
 	}
 
-	go func() {
-		ticker := time.NewTicker(opts.RefreshMetricsInterval) // Match metrics refresh window
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				endpoints := ds.PodList(datastore.AllPodsPredicate)
-				bridge.Reconcile(endpoints)
-			}
-		}
-	}()
-
 	scheduler := scheduling.NewSchedulerWithConfig(r.schedulerConfig)
-
 
 	saturationDetector := utilizationdetector.NewDetector(eppConfig.SaturationDetectorConfig, setupLog)
 
@@ -631,7 +616,7 @@ func (r *Runner) applyDeprecatedSaturationConfig(cfg *config.Config) {
 }
 
 func (r *Runner) setupDataLayer(enableNewMetrics bool, cfg *datalayer.Config,
-	epf datalayer.EndpointFactory, mgr ctrl.Manager) error {
+	epf datalayer.EndpointFactory, mgr ctrl.Manager, bridge *hypervisor.TelemetryBridge) error {
 	disallowedMetricsExtractor := ""
 	if !enableNewMetrics { // using backend.PodMetrics, disallow datalayer's metrics data source/extractor
 		disallowedMetricsExtractor = extractormetrics.MetricsExtractorType
@@ -656,6 +641,14 @@ func (r *Runner) setupDataLayer(enableNewMetrics bool, cfg *datalayer.Config,
 			}
 			setupLog.Info("notification source bound", "source", notifySrc.TypedName().String(), "gvk", notifySrc.GVK())
 		} else {
+			if src.TypedName().Type == "metrics" {
+				// Inject the TelemetryBridge as an Extractor plugin.
+				// This guarantees it is placed at the very end of the Extractor slice execution logic,
+				// ensuring all Generic Extractor outputs are fresh and available prior to this bridge execute.
+				if err := src.AddExtractor(bridge); err != nil {
+					setupLog.Error(err, "failed to attach TelemetryBridge extractor to metrics data source")
+				}
+			}
 			collectors = append(collectors, src)
 		}
 	}
@@ -685,7 +678,6 @@ func (t *TelemetryFacilitator) ReleaseEndpoint(ep fwkdl.Endpoint) {
 	t.bridge.DeregisterEndpoint(ep.GetMetadata().NamespacedName.String())
 	t.EndpointFactory.ReleaseEndpoint(ep)
 }
-
 
 func (r *Runner) setupMetricsCollection(enableNewMetrics bool, opts *runserver.Options, pmc backendmetrics.PodMetricsClient) datalayer.EndpointFactory {
 	if enableNewMetrics {

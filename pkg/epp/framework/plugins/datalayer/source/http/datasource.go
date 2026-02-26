@@ -39,7 +39,10 @@ type HTTPDataSource struct {
 	client     Client // client (e.g. a wrapped http.Client) used to get data
 	parser     func(io.Reader) (any, error)
 	outputType reflect.Type
-	extractors sync.Map // key: name, value: extractor
+
+	mu         sync.RWMutex
+	extractors []fwkdl.Extractor
+	names      map[string]bool // tracking for duplicates
 }
 
 // NewHTTPDataSource returns a new data source, configured with
@@ -67,6 +70,7 @@ func NewHTTPDataSource(scheme string, path string, skipCertVerification bool, pl
 		client:     defaultClient,
 		parser:     parser,
 		outputType: outputType,
+		names:      make(map[string]bool),
 	}
 	return dataSrc, nil
 }
@@ -88,22 +92,29 @@ func (dataSrc *HTTPDataSource) ExtractorType() reflect.Type {
 
 // Extractors returns a list of registered Extractor names.
 func (dataSrc *HTTPDataSource) Extractors() []string {
-	extractors := []string{}
-	dataSrc.extractors.Range(func(_, val any) bool {
-		if ex, ok := val.(fwkdl.Extractor); ok {
-			extractors = append(extractors, ex.TypedName().String())
-		}
-		return true // continue iteration
-	})
+	dataSrc.mu.RLock()
+	defer dataSrc.mu.RUnlock()
+
+	extractors := make([]string, 0, len(dataSrc.extractors))
+	for _, ex := range dataSrc.extractors {
+		extractors = append(extractors, ex.TypedName().String())
+	}
 	return extractors
 }
 
 // AddExtractor adds an extractor to the data source.
 // Validation of extractor compatibility is done by the runtime via datalayer.WithConfig.
 func (dataSrc *HTTPDataSource) AddExtractor(extractor fwkdl.Extractor) error {
-	if _, loaded := dataSrc.extractors.LoadOrStore(extractor.TypedName().Name, extractor); loaded {
+	dataSrc.mu.Lock()
+	defer dataSrc.mu.Unlock()
+
+	name := extractor.TypedName().Name
+	if dataSrc.names[name] {
 		return fmt.Errorf("attempt to add duplicate extractor %s to %s", extractor.TypedName(), dataSrc.TypedName())
 	}
+
+	dataSrc.names[name] = true
+	dataSrc.extractors = append(dataSrc.extractors, extractor)
 	return nil
 }
 
@@ -118,14 +129,14 @@ func (dataSrc *HTTPDataSource) Collect(ctx context.Context, ep fwkdl.Endpoint) e
 	}
 
 	var errs []error
-	dataSrc.extractors.Range(func(_, val any) bool {
-		if ex, ok := val.(fwkdl.Extractor); ok {
-			if err = ex.Extract(ctx, data, ep); err != nil {
-				errs = append(errs, err)
-			}
+	dataSrc.mu.RLock()
+	defer dataSrc.mu.RUnlock()
+
+	for _, ex := range dataSrc.extractors {
+		if err = ex.Extract(ctx, data, ep); err != nil {
+			errs = append(errs, err)
 		}
-		return true // continue iteration
-	})
+	}
 
 	if len(errs) != 0 {
 		return errors.Join(errs...)
