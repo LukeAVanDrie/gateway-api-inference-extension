@@ -220,3 +220,64 @@ func TestMasterTick(t *testing.T) {
 		t.Errorf("Expected temporal epoch to advance, but it stayed at %d", startEpoch)
 	}
 }
+
+func TestLedgerTransitiveRacing(t *testing.T) {
+	t.Parallel()
+	l := &TwoTierLedger{}
+
+	// Define standard resource allocations
+	l.UpdateEndpointConfig("ep-1", EndpointConfig{
+		Limits: &ResourceVector{
+			PrefillTokens:  2000,
+			DecodeTokens:   2000,
+			KVBlocks:       2000,
+			ActiveRequests: 2000,
+		},
+	})
+
+	l.globalMaxContiguous.PrefillTokens.Store(2000)
+	l.globalMaxContiguous.DecodeTokens.Store(2000)
+	l.globalMaxContiguous.KVBlocks.Store(2000)
+	l.globalMaxContiguous.ActiveRequests.Store(2000)
+
+	wg := sync.WaitGroup{}
+	concurrency := 500
+	runtimeSeconds := 2 * time.Second
+
+	// Run Master Tick
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.RunMasterTick(ctx)
+
+	start := time.Now()
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for time.Since(start) < runtimeSeconds {
+				receipt, err := l.TryAcquireHold(ResourceVector{KVBlocks: 10, ActiveRequests: 1})
+				if err != nil {
+					continue
+				}
+
+				commit, err := l.Commit("ep-1", ResourceVector{KVBlocks: 10, ActiveRequests: 1}, receipt)
+				if err != nil {
+					l.ReleaseHold(receipt)
+					continue
+				}
+
+				// Simulate generation execution overhead
+				time.Sleep(1 * time.Millisecond)
+
+				l.ReleaseEndpointCapacity("ep-1", commit)
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	// Assert: No negative boundaries leaked from math racing
+	if l.globalScraped.KVBlocks.Load() < 0 || l.globalTransit[0].KVBlocks.Load() < 0 {
+		t.Errorf("Capacity rolled negative during multithreaded transit math.")
+	}
+}

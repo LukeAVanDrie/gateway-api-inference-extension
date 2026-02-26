@@ -217,14 +217,12 @@ func (e *HierarchicalEstimator) Observe(
 
 // updateEMA performs a lock-free optimistic update of the float64 moving average.
 func updateEMA(state *emaState, actual int64, alpha float64) {
-	currentSamples := state.samples.Add(1)
-
 	for {
 		oldBits := state.average.Load()
 		var newVal float64
 
-		if currentSamples == 1 {
-			// We are deterministically the first observation. Seed it exactly.
+		if oldBits == 0 {
+			// Deterministically the first observation (unseeded). Seed it exactly.
 			newVal = float64(actual)
 		} else {
 			// Apply standard Exponential Moving Average math.
@@ -240,4 +238,5 @@ func updateEMA(state *emaState, actual int64, alpha float64) {
 			break
 		}
 	}
+	state.samples.Add(1)
 }

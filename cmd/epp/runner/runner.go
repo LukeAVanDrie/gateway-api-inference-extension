@@ -317,6 +317,16 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 
 	setupLog.Info("parsed config", "scheduler-config", r.schedulerConfig)
 
+	est, err := estimator.NewHierarchicalEstimator(
+		1024, // l1CacheSize
+		0.25, // alpha (EMA decay factor)
+		1.1,  // safetyMargin (10% overhead)
+		10,   // minSamples (minimum samples before relying on EMA)
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to initialize Estimator: %w", err)
+	}
+
 	ledger := &hypervisor.TwoTierLedger{}
 	go ledger.RunMasterTick(ctx)
 
@@ -349,15 +359,6 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to initialize Flow Registry: %w", err)
 		}
-		est, err := estimator.NewHierarchicalEstimator(
-			1024, // l1CacheSize
-			0.25, // alpha (EMA decay factor)
-			1.1,  // safetyMargin (10% overhead)
-			10,   // minSamples (minimum samples before relying on EMA)
-		)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to initialize Estimator: %w", err)
-		}
 		ledger := &hypervisor.TwoTierLedger{}
 		go ledger.RunMasterTick(ctx)
 		fc, err := fccontroller.NewFlowController(
@@ -378,7 +379,7 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		admissionController = requestcontrol.NewLegacyAdmissionController(saturationDetector, locator)
 	}
 
-	director := requestcontrol.NewDirectorWithConfig(ledger, ds, scheduler, admissionController, locator, r.requestControlConfig)
+	director := requestcontrol.NewDirectorWithConfig(ledger, ds, scheduler, admissionController, locator, est, r.requestControlConfig)
 
 	// --- Setup ExtProc Server Runner ---
 	serverRunner := &runserver.ExtProcServerRunner{

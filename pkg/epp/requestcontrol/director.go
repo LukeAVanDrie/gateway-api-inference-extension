@@ -26,6 +26,9 @@ import (
 	"strings"
 	"time"
 
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/estimator"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
+
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"sigs.k8s.io/gateway-api-inference-extension/apix/v1alpha2"
@@ -73,6 +76,7 @@ func NewDirectorWithConfig(
 	scheduler Scheduler,
 	admissionController AdmissionController,
 	podLocator contracts.PodLocator,
+	est estimator.TokenEstimator,
 	config *Config,
 ) *Director {
 	return &Director{
@@ -81,6 +85,7 @@ func NewDirectorWithConfig(
 		scheduler:             scheduler,
 		admissionController:   admissionController,
 		podLocator:            podLocator,
+		estimator:             est,
 		requestControlPlugins: *config,
 		defaultPriority:       0, // define default priority explicitly
 	}
@@ -101,6 +106,7 @@ type Director struct {
 	scheduler             Scheduler
 	admissionController   AdmissionController
 	podLocator            contracts.PodLocator
+	estimator             estimator.TokenEstimator
 	requestControlPlugins Config
 	// we just need a pointer to an int variable since priority is a pointer in InferenceObjective
 	// no need to set this in the constructor, since the value we want is the default int val
@@ -379,6 +385,15 @@ func (d *Director) HandleResponseBodyComplete(ctx context.Context, reqCtx *handl
 		endpointID := reqCtx.TargetPod.NamespacedName.String()
 		d.ledger.ReleaseEndpointCapacity(endpointID, reqCtx.CommitReceipt)
 		logger.V(logutil.DEBUG).Info("Released hypervisor endpoint capacity", "endpoint", endpointID)
+
+		if reqCtx.Usage.CompletionTokens > 0 {
+			priority := d.defaultPriority
+			if reqCtx.SchedulingRequest != nil {
+				priority = reqCtx.SchedulingRequest.Objectives.Priority
+			}
+			flow := flowcontrol.FlowKey{ID: reqCtx.FairnessID, Priority: priority}
+			d.estimator.Observe(flow, reqCtx.TargetModelName, reqCtx.IncomingModelName, int64(reqCtx.Usage.CompletionTokens))
+		}
 	}
 
 	d.runResponseCompletePlugins(ctx, reqCtx.SchedulingRequest, response, reqCtx.TargetPod)

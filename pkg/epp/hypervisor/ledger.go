@@ -249,14 +249,30 @@ func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *Comm
 	// Temporal window reconciliation
 	endpoint.mu.Lock()
 	currentEpoch := l.globalEpoch.Load()
-	if (currentEpoch - receipt.Epoch) < 2 {
+	shouldSubtract := (currentEpoch - receipt.Epoch) < 2
+	if shouldSubtract {
 		endpoint.transitBuckets[idx].KVBlocks -= receipt.ActualCost.KVBlocks
 		endpoint.transitBuckets[idx].ActiveRequests -= receipt.ActualCost.ActiveRequests
-
-		l.globalTransit[idx].KVBlocks.Add(-receipt.ActualCost.KVBlocks)
-		l.globalTransit[idx].ActiveRequests.Add(-receipt.ActualCost.ActiveRequests)
 	}
 	endpoint.mu.Unlock()
+
+	if shouldSubtract {
+		// Subtract from standard vectors using CAS to prevent negative Temporary Allocations.
+		// Since subtraction logic might run an instant after Master Tick has zeroed that bucket,
+		// the floor safeguards the vector from rolling negative values.
+		subAtomicNoNegative(&l.globalTransit[idx].KVBlocks, receipt.ActualCost.KVBlocks)
+		subAtomicNoNegative(&l.globalTransit[idx].ActiveRequests, receipt.ActualCost.ActiveRequests)
+	}
+}
+
+func subAtomicNoNegative(val *atomic.Int64, delta int64) {
+	for {
+		old := val.Load()
+		new := max(old-delta, 0)
+		if val.CompareAndSwap(old, new) {
+			break
+		}
+	}
 }
 
 // UpdateEndpointConfig modifies high benchmarks to scale topology dimensions.

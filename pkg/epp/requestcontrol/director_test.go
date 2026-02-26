@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datalayer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datastore"
 	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	fwkplugin "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
 	fwk "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/requestcontrol"
 	fwksched "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
@@ -59,6 +60,15 @@ const (
 )
 
 // --- Mocks ---
+
+type mockTokenEstimator struct{}
+
+func (m *mockTokenEstimator) Estimate(flow flowcontrol.FlowKey, targetModel, baseModel string, promptTokens, maxNewTokens int64, blockSize int64) hypervisor.ResourceVector {
+	return hypervisor.ResourceVector{}
+}
+
+func (m *mockTokenEstimator) Observe(flow flowcontrol.FlowKey, targetModel, baseModel string, actualGeneratedTokens int64) {
+}
 
 type mockAdmissionController struct {
 	admitErr error
@@ -674,7 +684,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 				config = config.WithAdmissionPlugins(newMockAdmissionPlugin("test-admit-plugin", test.admitRequestDenialError))
 
 				locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(ds), time.Minute)
-				director := NewDirectorWithConfig(mockLedger, ds, mockSched, test.mockAdmissionController, locator, config)
+				director := NewDirectorWithConfig(mockLedger, ds, mockSched, test.mockAdmissionController, locator, &mockTokenEstimator{}, config)
 				if test.name == "successful request with model rewrite" {
 					mockDs := &mockDatastore{
 						pods:     ds.PodList(datastore.AllPodsPredicate),
@@ -981,7 +991,7 @@ func TestDirector_ApplyWeightedModelRewrite(t *testing.T) {
 			mockDs := &mockDatastore{rewrites: test.rewrites}
 			locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(mockDs), time.Minute)
 			mockLedger := &mockTokenLedger{}
-			director := NewDirectorWithConfig(mockLedger, mockDs, &mockScheduler{}, &mockAdmissionController{}, locator, NewConfig())
+			director := NewDirectorWithConfig(mockLedger, mockDs, &mockScheduler{}, &mockAdmissionController{}, locator, &mockTokenEstimator{}, NewConfig())
 
 			reqCtx := &handlers.RequestContext{
 				IncomingModelName: test.incomingModel,
@@ -1089,6 +1099,7 @@ func TestDirector_HandleResponseReceived(t *testing.T) {
 		mockSched,
 		&mockAdmissionController{},
 		locator,
+		&mockTokenEstimator{},
 		NewConfig().WithResponseReceivedPlugins(pr1),
 	)
 
@@ -1129,7 +1140,7 @@ func TestDirector_HandleResponseStreaming(t *testing.T) {
 	mockSched := &mockScheduler{}
 	mockLedger := &mockTokenLedger{}
 	locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(ds), time.Minute)
-	director := NewDirectorWithConfig(mockLedger, ds, mockSched, nil, locator, NewConfig().WithResponseStreamingPlugins(ps1))
+	director := NewDirectorWithConfig(mockLedger, ds, mockSched, nil, locator, &mockTokenEstimator{}, NewConfig().WithResponseStreamingPlugins(ps1))
 
 	reqCtx := &handlers.RequestContext{
 		Request: &handlers.Request{
@@ -1167,7 +1178,7 @@ func TestDirector_HandleResponseComplete(t *testing.T) {
 	mockSched := &mockScheduler{}
 	mockLedger := &mockTokenLedger{}
 	locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(ds), time.Minute)
-	director := NewDirectorWithConfig(mockLedger, ds, mockSched, nil, locator, NewConfig().WithResponseCompletePlugins(pc1))
+	director := NewDirectorWithConfig(mockLedger, ds, mockSched, nil, locator, &mockTokenEstimator{}, NewConfig().WithResponseCompletePlugins(pc1))
 
 	reqCtx := &handlers.RequestContext{
 		Request: &handlers.Request{
