@@ -14,6 +14,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package autotuner implements a distributed controller designed to dynamically adjust token
+// throughput limits for the distributed GPU hypervisor.
+//
+// LLM generation physics (Memory Bandwidth, VRAM utilization) are highly sensitive to prompt
+// geometry, and hard-coded concurrency maximums rapidly degrade across workloads.
+// Autotuner acts as an autonomous Scaling Driver:
+//  1. Data Plane Analysis: Aggregates Prometheus metrics via Epoch Engines to locate physical
+//     hardware walls.
+//  2. Controlled Scaling: Applies Proportional Increase / Multiplicative Decrease (PI/MD) logic to
+//     accelerate throughput during peak efficiently without triggering catastrophic throughput and
+//     latency collapse.
+//
+// The Autotuner handles dynamic scaling locally for each endpoint and ensures execution guarantees
+// without relying on manual watermark tweaks.
 package autotuner
 
 import (
@@ -166,7 +180,7 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 			newLimits.DecodeTokens = int64(math.Ceil(float64(t.currentLimits.DecodeTokens) * t.config.SlowStartMultiplier))
 			t.lastPower = currentPower // Seed the power metric for a smooth handoff
 		} else {
-			// Phase 2: AIMD / Kleinrock's Power Deadband (Congestion Avoidance)
+			// Phase 2: PI Control / Kleinrock's Power Deadband (Congestion Avoidance)
 			if t.lastPower == 0 {
 				t.lastPower = currentPower
 				newLimits.DecodeTokens = int64(math.Ceil(float64(t.currentLimits.DecodeTokens) * t.config.IncreaseRatio))
@@ -174,7 +188,10 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 				powerDelta := (currentPower - t.lastPower) / t.lastPower
 
 				if powerDelta > t.config.DeadbandRatio {
-					// Additive Increase (math.Ceil prevents getting trapped at bottom via truncation)
+					// Proportional Increase is safe here because the High-Water Underutilization governor
+					// prevents runaway scaling when there is no actual demand.
+					//
+					// math.Ceil prevents getting trapped at bottom via truncation
 					newLimits.DecodeTokens = int64(math.Ceil(float64(t.currentLimits.DecodeTokens) * t.config.IncreaseRatio))
 				} else if powerDelta < -t.config.DeadbandRatio {
 					// The Knee: We hit the physical memory bandwidth wall. Back off slightly.
@@ -198,7 +215,7 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 		// Queue backing up: Multiplicative Decrease
 		newLimits.PrefillTokens = int64(float64(t.currentLimits.PrefillTokens) * 0.90)
 	} else if queueDelay < (t.config.MaxTargetQueueDelay / 3) {
-		// Queue empty (SMs starving): Additive Increase (with Ceil protection)
+		// Queue empty (SMs starving): Proportional Increase (with Ceil protection)
 		newLimits.PrefillTokens = int64(math.Ceil(float64(t.currentLimits.PrefillTokens) * 1.05))
 	}
 

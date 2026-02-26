@@ -101,38 +101,67 @@ func TestReleaseHold(t *testing.T) {
 func TestCommitLedger(t *testing.T) {
 	t.Parallel()
 
-	ledger := &TwoTierLedger{}
-	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
-	ledger.recalculateMaxContiguous()
-
-	// 1. Acquire hold
-	receipt, err := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
-	if err != nil {
-		t.Fatalf("TryAcquireHold failed: %v", err)
+	tests := []struct {
+		name       string
+		endpointID string
+		wantErr    error
+	}{
+		{
+			name:       "Success - Valid Endpoint",
+			endpointID: "test-endpoint",
+			wantErr:    nil,
+		},
+		{
+			name:       "Failure - Endpoint Not Found",
+			endpointID: "invalid-endpoint",
+			wantErr:    ErrEndpointNotFound,
+		},
 	}
 
-	// 2. Commit
-	actualCost := ResourceVector{KVBlocks: 50}
-	commitReceipt, err := ledger.Commit("test-endpoint", actualCost, receipt)
-	if err != nil {
-		t.Fatalf("Commit failed: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ledger := &TwoTierLedger{}
+			ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
+			ledger.recalculateMaxContiguous()
 
-	if commitReceipt == nil {
-		t.Fatal("Expected CommitReceipt, got nil")
-	}
+			// 1. Acquire hold
+			receipt, err := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
+			if err != nil {
+				t.Fatalf("TryAcquireHold failed: %v", err)
+			}
 
-	if ledger.globalHold.KVBlocks.Load() != 0 {
-		t.Errorf("Global hold should be 0 after Commit, got %d", ledger.globalHold.KVBlocks.Load())
-	}
+			if ledger.globalHold.KVBlocks.Load() != 100 {
+				t.Errorf("Expected globalHold to be 100 after acquire, got %d", ledger.globalHold.KVBlocks.Load())
+			}
 
-	ledger.endpointLedgers.Range(func(key, value any) bool {
-		endpoint := value.(*endpointLedger)
-		if endpoint == nil {
-			t.Fatal("Expected an endpoint, got nil")
-		}
-		return true
-	})
+			// 2. Commit
+			actualCost := ResourceVector{KVBlocks: 50}
+			commitReceipt, err := ledger.Commit(tt.endpointID, actualCost, receipt)
+
+			if err != tt.wantErr {
+				t.Errorf("Commit() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if tt.wantErr == nil && commitReceipt == nil {
+				t.Fatal("Expected CommitReceipt, got nil")
+			}
+
+			// 3. Verification - Global hold MUST always be released regardless of commit logic success.
+			if ledger.globalHold.KVBlocks.Load() != 0 {
+				t.Errorf("Global hold should be 0 after Commit, got %d", ledger.globalHold.KVBlocks.Load())
+			}
+
+			if tt.wantErr == nil {
+				ledger.endpointLedgers.Range(func(key, value any) bool {
+					endpoint := value.(*endpointLedger)
+					if endpoint == nil {
+						t.Fatal("Expected an endpoint, got nil")
+					}
+					return true
+				})
+			}
+		})
+	}
 }
 
 func TestReleaseEndpointCapacity(t *testing.T) {

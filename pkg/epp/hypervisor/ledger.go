@@ -37,10 +37,20 @@ type atomicResourceVector struct {
 	_              [32]byte // 32 bytes of payload + 32 bytes padding = 64 byte Cache Line
 }
 
+func (v *atomicResourceVector) load() ResourceVector {
+	return ResourceVector{
+		PrefillTokens:  v.PrefillTokens.Load(),
+		DecodeTokens:   v.DecodeTokens.Load(),
+		KVBlocks:       v.KVBlocks.Load(),
+		ActiveRequests: v.ActiveRequests.Load(),
+	}
+}
+
 // endpointLedger maintains the localized O(N) cache-aware routing metrics.
 type endpointLedger struct {
-	scrapedBaseline atomicResourceVector
-	limit           atomicResourceVector
+	scrapedBaseline  atomicResourceVector
+	endpointTracking atomicResourceVector
+	limit            atomicResourceVector
 
 	// mu protects the transitBuckets from zeroing races with the Master Tick.
 	// Because this is localized to a single endpoint, lock contention is practically zero.
@@ -58,6 +68,7 @@ type TwoTierLedger struct {
 
 	globalHold          atomicResourceVector
 	globalScraped       atomicResourceVector
+	globalTracking      atomicResourceVector
 	globalTransit       [3]atomicResourceVector
 	globalLimit         atomicResourceVector
 	globalMaxContiguous atomicResourceVector
@@ -85,8 +96,6 @@ func (l *TwoTierLedger) RunMasterTick(ctx context.Context) {
 			oldestIdx := (newEpoch + 1) % 3
 
 			// 1. Zero Global Bucket (Lock-free, eventual consistency)
-			l.globalTransit[oldestIdx].PrefillTokens.Store(0)
-			l.globalTransit[oldestIdx].DecodeTokens.Store(0)
 			l.globalTransit[oldestIdx].KVBlocks.Store(0)
 			l.globalTransit[oldestIdx].ActiveRequests.Store(0)
 
@@ -115,10 +124,11 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 	// If the request requires more space than the largest single contiguous hole available in the
 	// pool, reject it instantly. Aggregate math doesn't matter if it physically cannot fit on any
 	// single endpoint.
-	if worstCase.PrefillTokens > l.globalMaxContiguous.PrefillTokens.Load() ||
-		worstCase.DecodeTokens > l.globalMaxContiguous.DecodeTokens.Load() ||
-		worstCase.KVBlocks > l.globalMaxContiguous.KVBlocks.Load() ||
-		worstCase.ActiveRequests > l.globalMaxContiguous.ActiveRequests.Load() {
+	maxContiguous := l.globalMaxContiguous.load()
+	if worstCase.PrefillTokens > maxContiguous.PrefillTokens ||
+		worstCase.DecodeTokens > maxContiguous.DecodeTokens ||
+		worstCase.KVBlocks > maxContiguous.KVBlocks ||
+		worstCase.ActiveRequests > maxContiguous.ActiveRequests {
 		return nil, ErrGlobalCapacityExceeded
 	}
 
@@ -129,39 +139,39 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 	idx := epoch % 3
 	prevIdx := (epoch + 2) % 3 // strictly evaluates current and previous transit windows
 
-	checkAll := func(hold, scraped, t1, t2, limit *atomicResourceVector, worst ResourceVector) bool {
-		check := func(h, s, tr1, tr2, l *atomic.Int64, w int64) bool {
-			return (h.Load() + s.Load() + tr1.Load() + tr2.Load() + w) > l.Load()
-		}
+	checkSpatialAll := func(hold, scraped, t1, t2, limit *atomicResourceVector, worst ResourceVector) bool {
+		_hold := hold.load()
+		_scraped := scraped.load()
+		_t1 := t1.load()
+		_t2 := t2.load()
+		_limit := limit.load()
 
-		return (check(
-			&hold.PrefillTokens, &scraped.PrefillTokens,
-			&t1.PrefillTokens, &t2.PrefillTokens,
-			&limit.PrefillTokens, worst.PrefillTokens) ||
-			check(
-				&hold.DecodeTokens, &scraped.DecodeTokens,
-				&t1.DecodeTokens, &t2.DecodeTokens,
-				&limit.DecodeTokens, worst.DecodeTokens) ||
-			check(
-				&hold.KVBlocks, &scraped.KVBlocks,
-				&t1.KVBlocks, &t2.KVBlocks,
-				&limit.KVBlocks, worst.KVBlocks) ||
-			check(
-				&hold.ActiveRequests, &scraped.ActiveRequests,
-				&t1.ActiveRequests, &t2.ActiveRequests,
-				&limit.ActiveRequests, worst.ActiveRequests))
+		return ((_hold.KVBlocks+_scraped.KVBlocks+_t1.KVBlocks+_t2.KVBlocks+worst.KVBlocks) > _limit.KVBlocks ||
+			(_hold.ActiveRequests+_scraped.ActiveRequests+_t1.ActiveRequests+_t2.ActiveRequests+worst.ActiveRequests) > _limit.ActiveRequests)
+	}
+
+	checkThroughputAll := func(hold, tracked, limit *atomicResourceVector, worst ResourceVector) bool {
+		_hold := hold.load()
+		_tracked := tracked.load()
+		_limit := limit.load()
+
+		return ((_hold.PrefillTokens+_tracked.PrefillTokens+worst.PrefillTokens) > _limit.PrefillTokens ||
+			(_hold.DecodeTokens+_tracked.DecodeTokens+worst.DecodeTokens) > _limit.DecodeTokens)
 	}
 
 	// Evaluate bounds and return early on saturation.
-	if checkAll(
+	if checkSpatialAll(
 		&l.globalHold, &l.globalScraped,
 		&l.globalTransit[idx], &l.globalTransit[prevIdx],
+		&l.globalLimit, worstCase,
+	) || checkThroughputAll(
+		&l.globalHold, &l.globalTracking,
 		&l.globalLimit, worstCase,
 	) {
 		return nil, ErrGlobalCapacityExceeded
 	}
 
-	// Unconditionally Add upon success.
+	// Apply aggregation holds unconditionally upon success.
 	l.globalHold.PrefillTokens.Add(worstCase.PrefillTokens)
 	l.globalHold.DecodeTokens.Add(worstCase.DecodeTokens)
 	l.globalHold.KVBlocks.Add(worstCase.KVBlocks)
@@ -170,7 +180,7 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 	return &HoldReceipt{Held: worstCase}, nil
 }
 
-// ReleaseHold clears un-finalized estimations.
+// ReleaseHold releases projections safely back into the ephemeral pool.
 func (l *TwoTierLedger) ReleaseHold(receipt *HoldReceipt) {
 	if receipt == nil {
 		return
@@ -181,15 +191,11 @@ func (l *TwoTierLedger) ReleaseHold(receipt *HoldReceipt) {
 	l.globalHold.ActiveRequests.Add(-receipt.Held.ActiveRequests)
 }
 
-// Commit converts a pessimistic global hold into an actual O(N) endpoint-specific allocation.
+// Commit elevates a global HoldReceipt into an accurate CommitReceipt inside of the local endpoint
+// execution tracking, officially shifting capacity from the ephemeral pool into the dynamic
+// temporal net-transit bucket slice.
 // Returns a CommitReceipt tying this workload to the exact temporal epoch of admission.
-func (l *TwoTierLedger) Commit(
-	endpointID string,
-	actualCost ResourceVector,
-	receipt *HoldReceipt,
-) (*CommitReceipt, error) {
-	// Ensure global capacity is always refunded to prevent resource leakage in the event that
-	// endpoint resolution or routing fails.
+func (l *TwoTierLedger) Commit(endpointID string, actualCost ResourceVector, receipt *HoldReceipt) (*CommitReceipt, error) {
 	defer l.ReleaseHold(receipt)
 
 	value, ok := l.endpointLedgers.Load(endpointID)
@@ -201,17 +207,18 @@ func (l *TwoTierLedger) Commit(
 	epoch := l.globalEpoch.Load()
 	idx := epoch % 3
 
+	endpoint.endpointTracking.PrefillTokens.Add(actualCost.PrefillTokens)
+	endpoint.endpointTracking.DecodeTokens.Add(actualCost.DecodeTokens)
+	l.globalTracking.PrefillTokens.Add(actualCost.PrefillTokens)
+	l.globalTracking.DecodeTokens.Add(actualCost.DecodeTokens)
+
 	// Apply localized dimensions safely.
 	endpoint.mu.Lock()
-	endpoint.transitBuckets[idx].PrefillTokens += actualCost.PrefillTokens
-	endpoint.transitBuckets[idx].DecodeTokens += actualCost.DecodeTokens
 	endpoint.transitBuckets[idx].KVBlocks += actualCost.KVBlocks
 	endpoint.transitBuckets[idx].ActiveRequests += actualCost.ActiveRequests
 	endpoint.mu.Unlock()
 
 	// Apply global dimensions entirely lock-free.
-	l.globalTransit[idx].PrefillTokens.Add(actualCost.PrefillTokens)
-	l.globalTransit[idx].DecodeTokens.Add(actualCost.DecodeTokens)
 	l.globalTransit[idx].KVBlocks.Add(actualCost.KVBlocks)
 	l.globalTransit[idx].ActiveRequests.Add(actualCost.ActiveRequests)
 
@@ -222,9 +229,9 @@ func (l *TwoTierLedger) Commit(
 }
 
 // ReleaseEndpointCapacity applies the exact "Net-Transit" math.
-// If a request ends quickly, it refunds its original transit bucket. If it takes longer than the
-// sliding window, it refunds the scrapedBaseline as the telemetry has proven to have naturally
-// absorbed the request's footprint.
+//   - Spatial state (KVBlocks, ActiveReqs) dynamically reconciles.
+//   - Throughput state (PrefillTokens, DecodeTokens) is unconditionally refunded without transit
+//     interval windowing.
 func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *CommitReceipt) {
 	value, ok := l.endpointLedgers.Load(endpointID)
 	if !ok {
@@ -232,38 +239,24 @@ func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *Comm
 	}
 	endpoint := value.(*endpointLedger)
 
-	isOld := false
 	idx := receipt.Epoch % 3
 
-	// Securely determine temporal state while preventing race conditions against the Master Tick.
+	endpoint.endpointTracking.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
+	endpoint.endpointTracking.DecodeTokens.Add(-receipt.ActualCost.DecodeTokens)
+	l.globalTracking.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
+	l.globalTracking.DecodeTokens.Add(-receipt.ActualCost.DecodeTokens)
+
+	// Temporal window reconciliation
 	endpoint.mu.Lock()
 	currentEpoch := l.globalEpoch.Load()
-	if (currentEpoch - receipt.Epoch) >= 2 {
-		isOld = true
-	} else {
-		endpoint.transitBuckets[idx].PrefillTokens -= receipt.ActualCost.PrefillTokens
-		endpoint.transitBuckets[idx].DecodeTokens -= receipt.ActualCost.DecodeTokens
+	if (currentEpoch - receipt.Epoch) < 2 {
 		endpoint.transitBuckets[idx].KVBlocks -= receipt.ActualCost.KVBlocks
 		endpoint.transitBuckets[idx].ActiveRequests -= receipt.ActualCost.ActiveRequests
-	}
-	endpoint.mu.Unlock()
 
-	if isOld {
-		endpoint.scrapedBaseline.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
-		endpoint.scrapedBaseline.DecodeTokens.Add(-receipt.ActualCost.DecodeTokens)
-		endpoint.scrapedBaseline.KVBlocks.Add(-receipt.ActualCost.KVBlocks)
-		endpoint.scrapedBaseline.ActiveRequests.Add(-receipt.ActualCost.ActiveRequests)
-
-		l.globalScraped.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
-		l.globalScraped.DecodeTokens.Add(-receipt.ActualCost.DecodeTokens)
-		l.globalScraped.KVBlocks.Add(-receipt.ActualCost.KVBlocks)
-		l.globalScraped.ActiveRequests.Add(-receipt.ActualCost.ActiveRequests)
-	} else {
-		l.globalTransit[idx].PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
-		l.globalTransit[idx].DecodeTokens.Add(-receipt.ActualCost.DecodeTokens)
 		l.globalTransit[idx].KVBlocks.Add(-receipt.ActualCost.KVBlocks)
 		l.globalTransit[idx].ActiveRequests.Add(-receipt.ActualCost.ActiveRequests)
 	}
+	endpoint.mu.Unlock()
 }
 
 // UpdateEndpointConfig modifies high benchmarks to scale topology dimensions.
@@ -308,15 +301,11 @@ func (l *TwoTierLedger) ReconcileEndpointCapacity(endpointID string, scrapedUsag
 	}
 	endpoint := value.(*endpointLedger)
 
-	// Swap local scraped baseline and dynamically inject the accurate delta mathematics.
-	deltaPrefill := scrapedUsage.PrefillTokens - endpoint.scrapedBaseline.PrefillTokens.Swap(scrapedUsage.PrefillTokens)
-	deltaDecode := scrapedUsage.DecodeTokens - endpoint.scrapedBaseline.DecodeTokens.Swap(scrapedUsage.DecodeTokens)
+	// Reconcile Baseline (Spatially Tracked Dimensions Only)
 	deltaKV := scrapedUsage.KVBlocks - endpoint.scrapedBaseline.KVBlocks.Swap(scrapedUsage.KVBlocks)
 	deltaActive := scrapedUsage.ActiveRequests - endpoint.scrapedBaseline.ActiveRequests.Swap(scrapedUsage.ActiveRequests)
 
 	// Flow the resulting delta synchronously upwards into the aggregate view.
-	l.globalScraped.PrefillTokens.Add(deltaPrefill)
-	l.globalScraped.DecodeTokens.Add(deltaDecode)
 	l.globalScraped.KVBlocks.Add(deltaKV)
 	l.globalScraped.ActiveRequests.Add(deltaActive)
 }
@@ -331,23 +320,23 @@ func (l *TwoTierLedger) RemoveEndpoint(endpointID string) {
 	}
 	endpoint := value.(*endpointLedger)
 
-	// 1. Remove limits from global pool
+	// Remove limits from global pool.
 	l.globalLimit.PrefillTokens.Add(-endpoint.limit.PrefillTokens.Load())
 	l.globalLimit.DecodeTokens.Add(-endpoint.limit.DecodeTokens.Load())
 	l.globalLimit.KVBlocks.Add(-endpoint.limit.KVBlocks.Load())
 	l.globalLimit.ActiveRequests.Add(-endpoint.limit.ActiveRequests.Load())
 
-	// 2. Remove currently scraped active usage from global pool
-	l.globalScraped.PrefillTokens.Add(-int64(endpoint.scrapedBaseline.PrefillTokens.Load()))
-	l.globalScraped.DecodeTokens.Add(-int64(endpoint.scrapedBaseline.DecodeTokens.Load()))
-	l.globalScraped.KVBlocks.Add(-int64(endpoint.scrapedBaseline.KVBlocks.Load()))
-	l.globalScraped.ActiveRequests.Add(-int64(endpoint.scrapedBaseline.ActiveRequests.Load()))
+	// Remove currently scraped active usage from global pool (Spatial Only).
+	l.globalScraped.KVBlocks.Add(-endpoint.scrapedBaseline.KVBlocks.Load())
+	l.globalScraped.ActiveRequests.Add(-endpoint.scrapedBaseline.ActiveRequests.Load())
 
-	// 3. Remove any inflight transit debt from global pool safely
+	// Remove long-term tracking counters from global pool (Throughput Only).
+	l.globalTracking.PrefillTokens.Add(-endpoint.endpointTracking.PrefillTokens.Load())
+	l.globalTracking.DecodeTokens.Add(-endpoint.endpointTracking.DecodeTokens.Load())
+
+	// Remove any inflight transit debt from global pool safely (Spatial Only).
 	endpoint.mu.Lock()
 	for i := range endpoint.transitBuckets {
-		l.globalTransit[i].PrefillTokens.Add(-endpoint.transitBuckets[i].PrefillTokens)
-		l.globalTransit[i].DecodeTokens.Add(-endpoint.transitBuckets[i].DecodeTokens)
 		l.globalTransit[i].KVBlocks.Add(-endpoint.transitBuckets[i].KVBlocks)
 		l.globalTransit[i].ActiveRequests.Add(-endpoint.transitBuckets[i].ActiveRequests)
 	}
@@ -362,25 +351,38 @@ func (l *TwoTierLedger) recalculateMaxContiguous() {
 	l.endpointLedgers.Range(func(key, value any) bool {
 		endpoint := value.(*endpointLedger)
 
-		availPrefill := endpoint.limit.PrefillTokens.Load() - endpoint.scrapedBaseline.PrefillTokens.Load()
-		availDecode := endpoint.limit.DecodeTokens.Load() - endpoint.scrapedBaseline.DecodeTokens.Load()
-		availKV := endpoint.limit.KVBlocks.Load() - endpoint.scrapedBaseline.KVBlocks.Load()
-		availActive := endpoint.limit.ActiveRequests.Load() - endpoint.scrapedBaseline.ActiveRequests.Load()
+		limit := endpoint.limit.load()
+		tracking := endpoint.endpointTracking.load()
+		scraped := endpoint.scrapedBaseline.load()
+
+		availPrefill := limit.PrefillTokens - tracking.PrefillTokens
+		availDecode := limit.DecodeTokens - tracking.DecodeTokens
+		availKV := limit.KVBlocks - scraped.KVBlocks
+		availActive := limit.ActiveRequests - scraped.ActiveRequests
 
 		endpoint.mu.Lock()
 		for i := range 3 {
-			availPrefill -= endpoint.transitBuckets[i].PrefillTokens
-			availDecode -= endpoint.transitBuckets[i].DecodeTokens
 			availKV -= endpoint.transitBuckets[i].KVBlocks
 			availActive -= endpoint.transitBuckets[i].ActiveRequests
 		}
 		endpoint.mu.Unlock()
 
-		// Track the largest hole for each dimension across the pool.
-		maxPrefill = max(maxPrefill, availPrefill)
-		maxDecode = max(maxDecode, availDecode)
-		maxKV = max(maxKV, availKV)
-		maxActive = max(maxActive, availActive)
+		// KVBlocks is the primary rigid physical boundary.
+		// It used as the absolute sorting priority when determining which hole is truly the "largest".
+		if availKV > maxKV {
+			maxKV = availKV
+			maxPrefill = availPrefill
+			maxDecode = availDecode
+			maxActive = availActive
+		} else if availKV == maxKV {
+			// If VRAM is perfectly identical between endpoints, tie break on standard Memory Bandwidth
+			// availability.
+			if availDecode > maxDecode {
+				maxDecode = availDecode
+				maxPrefill = availPrefill
+				maxActive = availActive
+			}
+		}
 
 		return true
 	})

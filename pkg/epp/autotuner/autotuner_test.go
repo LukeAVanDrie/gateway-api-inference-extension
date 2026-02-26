@@ -32,16 +32,16 @@ type mockLedger struct {
 	currentLimits hypervisor.ResourceVector
 }
 
-func (m *mockLedger) UpdateEndpointLimits(endpointID string, newLimits hypervisor.ResourceVector) {
-	m.currentLimits = newLimits
-}
-
-func (m *mockLedger) UpdateEndpointKVBlocks(endpointID string, totalKVBlocks int64) {
-	m.currentLimits.KVBlocks = totalKVBlocks
-}
-
-func (m *mockLedger) UpdateEndpointActiveRequests(endpointID string, maxActiveRequests int64) {
-	m.currentLimits.ActiveRequests = maxActiveRequests
+func (m *mockLedger) UpdateEndpointConfig(endpointID string, cfg hypervisor.EndpointConfig) {
+	if cfg.Limits != nil {
+		m.currentLimits = *cfg.Limits
+	}
+	if cfg.TotalKVBlocks != nil {
+		m.currentLimits.KVBlocks = *cfg.TotalKVBlocks
+	}
+	if cfg.MaxActiveRequests != nil {
+		m.currentLimits.ActiveRequests = *cfg.MaxActiveRequests
+	}
 }
 
 func simulateHardware(limit int64, noise float64, peakThroughput float64, baseTPOT float64) datalayer.EpochDelta {
