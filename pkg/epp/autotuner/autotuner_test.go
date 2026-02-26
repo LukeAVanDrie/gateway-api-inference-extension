@@ -40,6 +40,10 @@ func (m *mockLedger) UpdateEndpointKVBlocks(endpointID string, totalKVBlocks int
 	m.currentLimits.KVBlocks = totalKVBlocks
 }
 
+func (m *mockLedger) UpdateEndpointActiveRequests(endpointID string, maxActiveRequests int64) {
+	m.currentLimits.ActiveRequests = maxActiveRequests
+}
+
 func simulateHardware(limit int64, noise float64, peakThroughput float64, baseTPOT float64) datalayer.EpochDelta {
 	utilization := float64(limit) / peakThroughput
 

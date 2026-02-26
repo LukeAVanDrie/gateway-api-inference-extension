@@ -38,8 +38,19 @@ type endpointState struct {
 	endpointID  string
 }
 
-// TelemetryBridge maintains a periodic reconciler state for extracting Prometheus
-// metrics, translating them into vectors, and feeding the ledger and autonomic engines.
+const (
+	// Standard generic extraction scaling attributes applied against prometheus telemetry feeds.
+	AttrTimePerOutputToken = "time_per_output_token_seconds"
+	AttrTimeToFirstToken   = "time_to_first_token_seconds"
+	AttrPrefillSeconds     = "prefill_seconds"
+	AttrGenerationTokens   = "generation_tokens_total"
+	AttrRequestSuccess     = "request_success_total"
+	AttrNumSwapped         = "num_requests_swapped"
+	AttrMaxNumSeqs         = "max_num_seqs"
+)
+
+// TelemetryBridge maintains a periodic reconciler state for extracting Prometheus metrics,
+// translating them into vectors, and feeding the ledger and autonomic engines.
 type TelemetryBridge struct {
 	ledger TokenLedger
 
@@ -118,11 +129,11 @@ func (t *TelemetryBridge) Reconcile(endpoints []fwkdl.Endpoint) {
 		attr := ep.GetAttributes()
 
 		// Required attribute keys from generic extractor
-		tpot := getHistogramValue(attr, "prometheus_vllm_time_per_output_token_seconds")
-		ttft := getHistogramValue(attr, "prometheus_vllm_time_to_first_token_seconds")
-		prefill := getHistogramValue(attr, "prometheus_vllm_prefill_seconds")
-		genTokens := getFloatValue(attr, "prometheus_vllm_generation_tokens_total")
-		reqSuccess := getFloatValue(attr, "prometheus_vllm_request_success_total")
+		tpot := getHistogramValue(attr, AttrTimePerOutputToken)
+		ttft := getHistogramValue(attr, AttrTimeToFirstToken)
+		prefill := getHistogramValue(attr, AttrPrefillSeconds)
+		genTokens := getFloatValue(attr, AttrGenerationTokens)
+		reqSuccess := getFloatValue(attr, AttrRequestSuccess)
 
 		// Create the parse EpochSnapshot snapshot.
 		snapshot := datalayer.EpochSnapshot{
@@ -135,21 +146,33 @@ func (t *TelemetryBridge) Reconcile(endpoints []fwkdl.Endpoint) {
 		}
 
 		// Vector Translation
-		cacheUsagePer := getFloatValue(attr, "prometheus_vllm_cache_usage")
-		running := getFloatValue(attr, "prometheus_vllm_num_requests_running")
-		swapped := getFloatValue(attr, "prometheus_vllm_num_requests_swapped")
+		// Pull statically typed metrics scraped via standard metrics watcher where available to avoid
+		// generic parsing overhead. Generic attributes are still used where explicit schemas aren't
+		// mapped (for any non-standard metrics missing from the Model Server Protocol).
+		var cacheUsagePer float64
+		var running float64
+		swapped := getFloatValue(attr, AttrNumSwapped)
 
-		// Fetch dynamic totalKVBlocks from extraction metrics if present.
+		// Fetch dynamic parameters from extracted metadata.
 		totalKVBlocks := state.autoTuner.GetKVBlocks()
-		if metrics := ep.GetMetrics(); metrics != nil && metrics.CacheNumGPUBlocks > 0 {
-			totalKVBlocks = int64(metrics.CacheNumGPUBlocks)
+		maxActiveRequests := getFloatValue(attr, AttrMaxNumSeqs)
 
-			// Propagate dynamic capacity limits straight into the Ledger.
+		if metrics := ep.GetMetrics(); metrics != nil {
+			cacheUsagePer = metrics.KVCacheUsagePercent
+			running = float64(metrics.RunningRequestsSize)
+
+			// Propagate rigid physical boundaries directly into the Ledger.
 			// The Autotuner handles dynamic scaling of compute limits, but Physical Storage capacity
-			// (KVBlocks) is statically determined by the backend's boot configuration and dynamically
-			// retrieved here.
-			t.ledger.UpdateEndpointKVBlocks(state.endpointID, totalKVBlocks)
-			state.autoTuner.SetKVBlocks(totalKVBlocks)
+			// is determined explicitly via local instantiation.
+			if metrics.CacheNumGPUBlocks > 0 {
+				totalKVBlocks = int64(metrics.CacheNumGPUBlocks)
+				t.ledger.UpdateEndpointKVBlocks(state.endpointID, totalKVBlocks)
+				state.autoTuner.SetKVBlocks(totalKVBlocks)
+			}
+		}
+
+		if maxActiveRequests > 0 {
+			t.ledger.UpdateEndpointActiveRequests(state.endpointID, int64(maxActiveRequests))
 		}
 
 		// Calculate the instantaneous ResourceVector.

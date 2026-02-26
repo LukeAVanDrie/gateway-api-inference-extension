@@ -233,7 +233,7 @@ func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *Comm
 	// Securely determine temporal state while preventing race conditions against the Master Tick.
 	endpoint.mu.Lock()
 	currentEpoch := l.globalEpoch.Load()
-	if (currentEpoch - receipt.Epoch) >= 3 {
+	if (currentEpoch - receipt.Epoch) >= 2 {
 		isOld = true
 	} else {
 		endpoint.transitBuckets[idx].PrefillTokens -= receipt.ActualCost.PrefillTokens
@@ -292,6 +292,18 @@ func (l *TwoTierLedger) UpdateEndpointKVBlocks(endpointID string, totalKVBlocks 
 	l.globalLimit.KVBlocks.Add(totalKVBlocks - oldKV)
 }
 
+// UpdateEndpointActiveRequests propagates newly scraped rigid concurrency capacities.
+func (l *TwoTierLedger) UpdateEndpointActiveRequests(endpointID string, maxActiveRequests int64) {
+	value, ok := l.endpointLedgers.Load(endpointID)
+	if !ok {
+		value, _ = l.endpointLedgers.LoadOrStore(endpointID, &endpointLedger{})
+	}
+	endpoint := value.(*endpointLedger)
+
+	oldActive := endpoint.limit.ActiveRequests.Swap(maxActiveRequests)
+	l.globalLimit.ActiveRequests.Add(maxActiveRequests - oldActive)
+}
+
 // ReconcileEndpointCapacity incorporates official real-time state via a polled baseline overwrite.
 func (l *TwoTierLedger) ReconcileEndpointCapacity(endpointID string, scrapedUsage ResourceVector) {
 	value, ok := l.endpointLedgers.Load(endpointID)
@@ -323,14 +335,19 @@ func (l *TwoTierLedger) RecalculateMaxContiguous() {
 	l.endpointLedgers.Range(func(key, value any) bool {
 		endpoint := value.(*endpointLedger)
 
-		// Approximate contiguous space = Limit - ScrapedBaseline
-		// We intentionally omit the ephemeral transit buckets here so Flow Control doesn't aggressively
-		// reject requests based on microsecond-level fluctuations. The Scheduler will perform the
-		// strict final O(N) bin-packing check anyway.
 		availPrefill := endpoint.limit.PrefillTokens.Load() - endpoint.scrapedBaseline.PrefillTokens.Load()
 		availDecode := endpoint.limit.DecodeTokens.Load() - endpoint.scrapedBaseline.DecodeTokens.Load()
 		availKV := endpoint.limit.KVBlocks.Load() - endpoint.scrapedBaseline.KVBlocks.Load()
 		availActive := endpoint.limit.ActiveRequests.Load() - endpoint.scrapedBaseline.ActiveRequests.Load()
+
+		endpoint.mu.Lock()
+		for i := range 3 {
+			availPrefill -= endpoint.transitBuckets[i].PrefillTokens
+			availDecode -= endpoint.transitBuckets[i].DecodeTokens
+			availKV -= endpoint.transitBuckets[i].KVBlocks
+			availActive -= endpoint.transitBuckets[i].ActiveRequests
+		}
+		endpoint.mu.Unlock()
 
 		// Track the largest hole for each dimension across the pool.
 		maxPrefill = max(maxPrefill, availPrefill)

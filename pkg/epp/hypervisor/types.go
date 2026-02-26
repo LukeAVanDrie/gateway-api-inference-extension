@@ -89,6 +89,9 @@ type TokenLedger interface {
 	// UpdateEndpointKVBlocks propagates newly scraped physical KV Cache capacities.
 	UpdateEndpointKVBlocks(endpointID string, totalKVBlocks int64)
 
+	// UpdateEndpointActiveRequests propagates newly scraped rigid concurrency capacities.
+	UpdateEndpointActiveRequests(endpointID string, maxActiveRequests int64)
+
 	// ReconcileEndpointCapacity incorporates authoritative real-time state via a polled baseline
 	// overwrite, propagating deltas synchronously upwards to the aggregate view.
 	ReconcileEndpointCapacity(endpointID string, scrapedUsage ResourceVector)
