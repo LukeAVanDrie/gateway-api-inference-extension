@@ -66,12 +66,11 @@ type TwoTierLedger struct {
 	// mutually inflate bounds and universally reject themselves.
 	admissionMu sync.Mutex
 
-	globalHold          atomicResourceVector
-	globalScraped       atomicResourceVector
-	globalTracking      atomicResourceVector
-	globalTransit       [3]atomicResourceVector
-	globalLimit         atomicResourceVector
-	globalMaxContiguous atomicResourceVector
+	globalHold     atomicResourceVector
+	globalScraped  atomicResourceVector
+	globalTracking atomicResourceVector
+	globalTransit  [3]atomicResourceVector
+	globalLimit    atomicResourceVector
 
 	globalEpoch atomic.Uint64 // Monotonically increasing temporal epoch (1 tick = 50ms)
 
@@ -109,11 +108,6 @@ func (l *TwoTierLedger) RunMasterTick(ctx context.Context) {
 
 				return true
 			})
-
-			// Pool-Level Finalization
-			// Must be called exactly once per pool iteration to defend against Head-of-Line (HOL)
-			// fragmentation state issues.
-			l.recalculateMaxContiguous()
 		}
 	}
 }
@@ -121,23 +115,37 @@ func (l *TwoTierLedger) RunMasterTick(ctx context.Context) {
 // TryAcquireHold applies the O(1) global admission check synchronously, and only adds to the
 // un-committed pool upon success.
 func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, error) {
-	// If the request requires more space than the largest single contiguous hole available in the
-	// pool, reject it instantly. Aggregate math doesn't matter if it physically cannot fit on any
-	// single endpoint.
-	maxContiguous := l.globalMaxContiguous.load()
-	if worstCase.PrefillTokens > maxContiguous.PrefillTokens ||
-		worstCase.DecodeTokens > maxContiguous.DecodeTokens ||
-		worstCase.KVBlocks > maxContiguous.KVBlocks ||
-		worstCase.ActiveRequests > maxContiguous.ActiveRequests {
+	epoch := l.globalEpoch.Load()
+	idx := epoch % 3
+	prevIdx := (epoch + 2) % 3 // strictly evaluates current and previous transit windows
+
+	hasCapacity := false
+	l.endpointLedgers.Range(func(key, value any) bool {
+		endpoint := value.(*endpointLedger)
+		limit := endpoint.limit.load()
+		scraped := endpoint.scrapedBaseline.load()
+
+		availKV := limit.KVBlocks - scraped.KVBlocks
+		availActive := limit.ActiveRequests - scraped.ActiveRequests
+
+		endpoint.mu.Lock()
+		availKV -= endpoint.transitBuckets[idx].KVBlocks + endpoint.transitBuckets[prevIdx].KVBlocks
+		availActive -= endpoint.transitBuckets[idx].ActiveRequests + endpoint.transitBuckets[prevIdx].ActiveRequests
+		endpoint.mu.Unlock()
+
+		if worstCase.KVBlocks <= availKV && worstCase.ActiveRequests <= availActive {
+			hasCapacity = true
+			return false // short circuit
+		}
+		return true
+	})
+
+	if !hasCapacity {
 		return nil, ErrGlobalCapacityExceeded
 	}
 
 	l.admissionMu.Lock()
 	defer l.admissionMu.Unlock()
-
-	epoch := l.globalEpoch.Load()
-	idx := epoch % 3
-	prevIdx := (epoch + 2) % 3 // strictly evaluates current and previous transit windows
 
 	checkSpatialAll := func(hold, scraped, t1, t2, limit *atomicResourceVector, worst ResourceVector) bool {
 		_hold := hold.load()
@@ -357,55 +365,4 @@ func (l *TwoTierLedger) RemoveEndpoint(endpointID string) {
 		l.globalTransit[i].ActiveRequests.Add(-endpoint.transitBuckets[i].ActiveRequests)
 	}
 	endpoint.mu.Unlock()
-}
-
-// recalculateMaxContiguous evaluates all endpoints to find the largest single-endpoint contiguous
-// capacity for each dimension.
-func (l *TwoTierLedger) recalculateMaxContiguous() {
-	var maxPrefill, maxDecode, maxKV, maxActive int64
-
-	l.endpointLedgers.Range(func(key, value any) bool {
-		endpoint := value.(*endpointLedger)
-
-		limit := endpoint.limit.load()
-		tracking := endpoint.endpointTracking.load()
-		scraped := endpoint.scrapedBaseline.load()
-
-		availPrefill := limit.PrefillTokens - tracking.PrefillTokens
-		availDecode := limit.DecodeTokens - tracking.DecodeTokens
-		availKV := limit.KVBlocks - scraped.KVBlocks
-		availActive := limit.ActiveRequests - scraped.ActiveRequests
-
-		endpoint.mu.Lock()
-		for i := range 3 {
-			availKV -= endpoint.transitBuckets[i].KVBlocks
-			availActive -= endpoint.transitBuckets[i].ActiveRequests
-		}
-		endpoint.mu.Unlock()
-
-		// KVBlocks is the primary rigid physical boundary.
-		// It used as the absolute sorting priority when determining which hole is truly the "largest".
-		if availKV > maxKV {
-			maxKV = availKV
-			maxPrefill = availPrefill
-			maxDecode = availDecode
-			maxActive = availActive
-		} else if availKV == maxKV {
-			// If VRAM is perfectly identical between endpoints, tie break on standard Memory Bandwidth
-			// availability.
-			if availDecode > maxDecode {
-				maxDecode = availDecode
-				maxPrefill = availPrefill
-				maxActive = availActive
-			}
-		}
-
-		return true
-	})
-
-	// Commit the new maximums.
-	l.globalMaxContiguous.PrefillTokens.Store(maxPrefill)
-	l.globalMaxContiguous.DecodeTokens.Store(maxDecode)
-	l.globalMaxContiguous.KVBlocks.Store(maxKV)
-	l.globalMaxContiguous.ActiveRequests.Store(maxActive)
 }

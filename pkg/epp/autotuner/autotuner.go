@@ -59,9 +59,41 @@ type TunerConfig struct {
 	// Slow-Start Configuration
 	SlowStartMultiplier float64 // e.g., 1.50 (50% growth per epoch until first SLA breach)
 
+	MaxLimitChangePerEpoch float64 // Maximum multiplier for any single auto-tuner epoch (e.g. 2.0 = 100% growth limit)
+
+	// Overdrive Protection: Fixed Token Increment capping
+	MaxLimitAdditiveIncrease hypervisor.ResourceVector // Maximum absolutely tokens to increment in a single epoch (e.g. at most +5000 tokens)
+
 	// Idle Reset Configuration
 	IdleResetDuration time.Duration             // e.g., 5 * time.Minute
 	DefaultLimits     hypervisor.ResourceVector // The safe baseline to fall back to
+}
+
+// DefaultTunerConfig returns the standard fallback and initialization production settings
+// for the Autotuner based on validation benchmarks.
+func DefaultTunerConfig() TunerConfig {
+	return TunerConfig{
+		TargetTPOT:             100 * time.Millisecond,
+		MaxTargetQueueDelay:    200 * time.Millisecond,
+		IncreaseRatio:          1.05,
+		DecreaseRatio:          0.80,
+		BackoffRatio:           0.98,
+		DeadbandRatio:          0.02,
+		UtilizationThreshold:   0.60,
+		HighWaterDecay:         0.995,
+		MinSuccessSamples:      5,
+		SlowStartMultiplier:    1.50,
+		MaxLimitChangePerEpoch: 2.0,
+		MaxLimitAdditiveIncrease: hypervisor.ResourceVector{
+			DecodeTokens:  5000,
+			PrefillTokens: 5000,
+		},
+		IdleResetDuration: 5 * time.Minute,
+		DefaultLimits: hypervisor.ResourceVector{
+			DecodeTokens:  10000,
+			PrefillTokens: 10000,
+		},
+	}
 }
 
 type PodAutoTuner struct {
@@ -104,7 +136,7 @@ func (t *PodAutoTuner) GetKVBlocks() int64 {
 
 func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hypervisor.ResourceVector) {
 	// --- Idle Tracking & TCP Slow-Start Reset ---
-	if delta.DeltaRequestSuccess == 0 && delta.ThroughputTokensSec == 0 {
+	if delta.DeltaRequestSuccess == 0 && delta.ThroughputTokensSec == 0 && currentUsed.ActiveRequests == 0 {
 		// If we've been idle for longer than the threshold, scrub the state and arm the Slow-Start
 		// sequence for the next wave of traffic.
 		if !t.lastTrafficTime.IsZero() && t.clock().Sub(t.lastTrafficTime) > t.config.IdleResetDuration {
@@ -169,7 +201,15 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 		}
 
 		// Multiplicative Decrease (Standard AIMD penalty)
-		newLimits.DecodeTokens = int64(float64(t.currentLimits.DecodeTokens) * t.config.DecreaseRatio)
+
+		// --- HBM Cross-Talk Governor ---
+		// If Prefill is clogging the HBM bandwidth, do NOT punish the Decode limits due to high latency.
+		// Wait for the Prefill bottleneck to clear.
+		queueDelaySeconds := max(delta.P50TTFT-delta.P50Prefill, 0)
+		queueDelay := time.Duration(queueDelaySeconds * float64(time.Second))
+		if queueDelay <= t.config.MaxTargetQueueDelay {
+			newLimits.DecodeTokens = int64(float64(t.currentLimits.DecodeTokens) * t.config.DecreaseRatio)
+		}
 	} else {
 		// --- Gradient Ascent ---
 		currentPower := delta.ThroughputTokensSec / delta.P90TPOT
@@ -177,13 +217,34 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 		if t.inSlowStart {
 			// Phase 1: TCP Slow-Start (Exponential Growth)
 			// Sprint towards the wall to clear the Gateway queue debt rapidly.
-			newLimits.DecodeTokens = int64(math.Ceil(float64(t.currentLimits.DecodeTokens) * t.config.SlowStartMultiplier))
+			multiplier := t.config.SlowStartMultiplier
+			if t.config.MaxLimitChangePerEpoch > 0 && multiplier > t.config.MaxLimitChangePerEpoch {
+				multiplier = t.config.MaxLimitChangePerEpoch
+			}
+
+			// Multiplicative baseline
+			proportionalLimit := float64(t.currentLimits.DecodeTokens) * multiplier
+
+			// Additive bound
+			if t.config.MaxLimitAdditiveIncrease.DecodeTokens > 0 {
+				additiveLimit := float64(t.currentLimits.DecodeTokens + t.config.MaxLimitAdditiveIncrease.DecodeTokens)
+				proportionalLimit = math.Min(proportionalLimit, additiveLimit)
+			}
+
+			newLimits.DecodeTokens = int64(math.Ceil(proportionalLimit))
 			t.lastPower = currentPower // Seed the power metric for a smooth handoff
 		} else {
 			// Phase 2: PI Control / Kleinrock's Power Deadband (Congestion Avoidance)
+			// Proportional Increase / Decrements are still bounded by absolute token step increase, to ensure
+			// stability during rapid convergence phases.
 			if t.lastPower == 0 {
 				t.lastPower = currentPower
-				newLimits.DecodeTokens = int64(math.Ceil(float64(t.currentLimits.DecodeTokens) * t.config.IncreaseRatio))
+				proportionalLimit := float64(t.currentLimits.DecodeTokens) * t.config.IncreaseRatio
+				if t.config.MaxLimitAdditiveIncrease.DecodeTokens > 0 {
+					additiveLimit := float64(t.currentLimits.DecodeTokens + t.config.MaxLimitAdditiveIncrease.DecodeTokens)
+					proportionalLimit = math.Min(proportionalLimit, additiveLimit)
+				}
+				newLimits.DecodeTokens = int64(math.Ceil(proportionalLimit))
 			} else {
 				powerDelta := (currentPower - t.lastPower) / t.lastPower
 
@@ -192,7 +253,12 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 					// prevents runaway scaling when there is no actual demand.
 					//
 					// math.Ceil prevents getting trapped at bottom via truncation
-					newLimits.DecodeTokens = int64(math.Ceil(float64(t.currentLimits.DecodeTokens) * t.config.IncreaseRatio))
+					proportionalLimit := float64(t.currentLimits.DecodeTokens) * t.config.IncreaseRatio
+					if t.config.MaxLimitAdditiveIncrease.DecodeTokens > 0 {
+						additiveLimit := float64(t.currentLimits.DecodeTokens + t.config.MaxLimitAdditiveIncrease.DecodeTokens)
+						proportionalLimit = math.Min(proportionalLimit, additiveLimit)
+					}
+					newLimits.DecodeTokens = int64(math.Ceil(proportionalLimit))
 				} else if powerDelta < -t.config.DeadbandRatio {
 					// The Knee: We hit the physical memory bandwidth wall. Back off slightly.
 					newLimits.DecodeTokens = int64(math.Floor(float64(t.currentLimits.DecodeTokens) * t.config.BackoffRatio))
@@ -216,7 +282,12 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 		newLimits.PrefillTokens = int64(float64(t.currentLimits.PrefillTokens) * 0.90)
 	} else if queueDelay < (t.config.MaxTargetQueueDelay / 3) {
 		// Queue empty (SMs starving): Proportional Increase (with Ceil protection)
-		newLimits.PrefillTokens = int64(math.Ceil(float64(t.currentLimits.PrefillTokens) * 1.05))
+		proportionalLimit := float64(t.currentLimits.PrefillTokens) * 1.05
+		if t.config.MaxLimitAdditiveIncrease.PrefillTokens > 0 {
+			additiveLimit := float64(t.currentLimits.PrefillTokens + t.config.MaxLimitAdditiveIncrease.PrefillTokens)
+			proportionalLimit = math.Min(proportionalLimit, additiveLimit)
+		}
+		newLimits.PrefillTokens = int64(math.Ceil(proportionalLimit))
 	}
 
 	// --- Apply Limits (The Output) ---

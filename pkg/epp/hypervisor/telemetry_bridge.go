@@ -63,6 +63,10 @@ type TelemetryBridge struct {
 	endpoints map[string]*endpointState
 }
 
+func (t *TelemetryBridge) Ledger() TokenLedger {
+	return t.ledger
+}
+
 func (t *TelemetryBridge) TypedName() fwkplugin.TypedName {
 	return fwkplugin.TypedName{
 		Type: "hypervisor-metrics-bridge",

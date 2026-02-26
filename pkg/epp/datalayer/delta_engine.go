@@ -82,12 +82,14 @@ func (e *PodDeltaEngine) UpdateScrape(scrape EpochSnapshot) *EpochDelta {
 
 	// 1. Defend against Prometheus Counter Resets (Pod Restarts)
 	// If any cumulative counter goes backward, the backend rebooted.
-	if scrape.GenerationTokensTotal < e.lastEpoch.GenerationTokensTotal ||
-		scrape.RequestSuccessTotal < e.lastEpoch.RequestSuccessTotal ||
-		scrape.TPOTHistogram.Count < e.lastEpoch.TPOTHistogram.Count ||
-		scrape.TTFTHistogram.Count < e.lastEpoch.TTFTHistogram.Count ||
-		scrape.PrefillHistogram.Count < e.lastEpoch.PrefillHistogram.Count {
+	// We ignore strict transition TO zero, as that may indicate a scrape omission/error.
+	isReset := (scrape.GenerationTokensTotal < e.lastEpoch.GenerationTokensTotal && scrape.GenerationTokensTotal > 0) ||
+		(scrape.RequestSuccessTotal < e.lastEpoch.RequestSuccessTotal && scrape.RequestSuccessTotal > 0) ||
+		(scrape.TPOTHistogram.Count < e.lastEpoch.TPOTHistogram.Count && scrape.TPOTHistogram.Count > 0) ||
+		(scrape.TTFTHistogram.Count < e.lastEpoch.TTFTHistogram.Count && scrape.TTFTHistogram.Count > 0) ||
+		(scrape.PrefillHistogram.Count < e.lastEpoch.PrefillHistogram.Count && scrape.PrefillHistogram.Count > 0)
 
+	if isReset {
 		// Reset our baseline and wait for the next tumbling window.
 		e.lastEpoch = scrape
 		return nil

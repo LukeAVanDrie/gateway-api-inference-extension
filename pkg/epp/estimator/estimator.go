@@ -217,7 +217,7 @@ func (e *HierarchicalEstimator) Observe(
 
 // updateEMA performs a lock-free optimistic update of the float64 moving average.
 func updateEMA(state *emaState, actual int64, alpha float64) {
-	for {
+	for range 10 {
 		oldBits := state.average.Load()
 		var newVal float64
 
@@ -235,8 +235,8 @@ func updateEMA(state *emaState, actual int64, alpha float64) {
 		// CompareAndSwap ensures that if another request updated the EMA while we were calculating, we
 		// throw away our calculation and try again.
 		if state.average.CompareAndSwap(oldBits, newBits) {
+			state.samples.Add(1)
 			break
 		}
 	}
-	state.samples.Add(1)
 }

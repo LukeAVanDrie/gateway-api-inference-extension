@@ -30,7 +30,6 @@ func TestRAGBombConcurrency(t *testing.T) {
 	ledger := &TwoTierLedger{}
 	// Initialize ledger with a global KV block limit of 100,000
 	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 100000, ActiveRequests: 100000}})
-	ledger.recalculateMaxContiguous()
 
 	var wg sync.WaitGroup
 	successCount := atomic.Int64{}
@@ -78,7 +77,6 @@ func TestReleaseHold(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
-	ledger.recalculateMaxContiguous()
 
 	// 1. Acquire hold
 	receipt, err := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
@@ -122,7 +120,6 @@ func TestCommitLedger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ledger := &TwoTierLedger{}
 			ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
-			ledger.recalculateMaxContiguous()
 
 			// 1. Acquire hold
 			receipt, err := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
@@ -169,7 +166,6 @@ func TestReleaseEndpointCapacity(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
-	ledger.recalculateMaxContiguous()
 
 	// Commit receipt is necessary for releasing.
 	receipt, _ := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
@@ -187,7 +183,6 @@ func TestReconcileEndpointCapacity(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
-	ledger.recalculateMaxContiguous()
 
 	scrapedUsage := ResourceVector{KVBlocks: 150}
 	ledger.ReconcileEndpointCapacity("test-endpoint", scrapedUsage)
@@ -202,7 +197,6 @@ func TestMasterTick(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
-	ledger.recalculateMaxContiguous()
 
 	// Initial epoch should be 0 or 1
 	startEpoch := ledger.globalEpoch.Load()
@@ -234,11 +228,6 @@ func TestLedgerTransitiveRacing(t *testing.T) {
 			ActiveRequests: 2000,
 		},
 	})
-
-	l.globalMaxContiguous.PrefillTokens.Store(2000)
-	l.globalMaxContiguous.DecodeTokens.Store(2000)
-	l.globalMaxContiguous.KVBlocks.Store(2000)
-	l.globalMaxContiguous.ActiveRequests.Store(2000)
 
 	wg := sync.WaitGroup{}
 	concurrency := 500

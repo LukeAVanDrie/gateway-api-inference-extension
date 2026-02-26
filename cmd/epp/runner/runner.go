@@ -48,6 +48,7 @@ import (
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/logging"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/profiling"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/tracing"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/autotuner"
 	backendmetrics "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/config"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/config/loader"
@@ -670,7 +671,13 @@ type TelemetryFacilitator struct {
 func (t *TelemetryFacilitator) NewEndpoint(ctx context.Context, meta *fwkdl.EndpointMetadata, info datalayer.PoolInfo) fwkdl.Endpoint {
 	ep := t.EndpointFactory.NewEndpoint(ctx, meta, info)
 	if ep != nil {
-		t.bridge.RegisterEndpoint(ep.GetMetadata().NamespacedName.String(), &datalayer.PodDeltaEngine{}, nil)
+		endpointID := ep.GetMetadata().NamespacedName.String()
+		deltaEngine := datalayer.NewPodDeltaEngine(2 * time.Second)
+
+		tunerConfig := autotuner.DefaultTunerConfig()
+		autoTuner := autotuner.NewPodAutoTuner(endpointID, tunerConfig, t.bridge.Ledger(), tunerConfig.DefaultLimits)
+
+		t.bridge.RegisterEndpoint(endpointID, deltaEngine, autoTuner)
 	}
 	return ep
 }
