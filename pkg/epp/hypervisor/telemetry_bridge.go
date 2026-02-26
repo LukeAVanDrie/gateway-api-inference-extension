@@ -28,13 +28,14 @@ import (
 // EpochEvaluator abstracts the Auto-Tuner to break the cyclic import dependency.
 type EpochEvaluator interface {
 	EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed ResourceVector)
+	SetKVBlocks(totalKVBlocks int64)
+	GetKVBlocks() int64
 }
 
 type endpointState struct {
-	deltaEngine   *datalayer.PodDeltaEngine
-	autoTuner     EpochEvaluator
-	totalKVBlocks int64
-	endpointID    string
+	deltaEngine *datalayer.PodDeltaEngine
+	autoTuner   EpochEvaluator
+	endpointID  string
 }
 
 // TelemetryBridge maintains a periodic reconciler state for extracting Prometheus
@@ -55,15 +56,14 @@ func NewTelemetryBridge(ledger TokenLedger) *TelemetryBridge {
 }
 
 // RegisterEndpoint sets up a newly discovered endpoint in the state machine.
-func (t *TelemetryBridge) RegisterEndpoint(endpointID string, deltaEngine *datalayer.PodDeltaEngine, tuner EpochEvaluator, totalKVBlocks int64) {
+func (t *TelemetryBridge) RegisterEndpoint(endpointID string, deltaEngine *datalayer.PodDeltaEngine, tuner EpochEvaluator) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.endpoints[endpointID] = &endpointState{
-		deltaEngine:   deltaEngine,
-		autoTuner:     tuner,
-		totalKVBlocks: totalKVBlocks,
-		endpointID:    endpointID,
+		deltaEngine: deltaEngine,
+		autoTuner:   tuner,
+		endpointID:  endpointID,
 	}
 }
 
@@ -139,12 +139,25 @@ func (t *TelemetryBridge) Reconcile(endpoints []fwkdl.Endpoint) {
 		running := getFloatValue(attr, "prometheus_vllm_num_requests_running")
 		swapped := getFloatValue(attr, "prometheus_vllm_num_requests_swapped")
 
+		// Fetch dynamic totalKVBlocks from extraction metrics if present.
+		totalKVBlocks := state.autoTuner.GetKVBlocks()
+		if metrics := ep.GetMetrics(); metrics != nil && metrics.CacheNumGPUBlocks > 0 {
+			totalKVBlocks = int64(metrics.CacheNumGPUBlocks)
+
+			// Propagate dynamic capacity limits straight into the Ledger.
+			// The Autotuner handles dynamic scaling of compute limits, but Physical Storage capacity
+			// (KVBlocks) is statically determined by the backend's boot configuration and dynamically
+			// retrieved here.
+			t.ledger.UpdateEndpointKVBlocks(state.endpointID, totalKVBlocks)
+			state.autoTuner.SetKVBlocks(totalKVBlocks)
+		}
+
 		// Calculate the instantaneous ResourceVector.
 		// vLLM emits cache utilization as a percentage float between 0.0 and 1.0.
 		// Multiply this percentage by the endpoint's configured TotalKVBlocks
 		// to resolve the absolute integer block count.
 		currentUsage := ResourceVector{
-			KVBlocks:       int64(cacheUsagePer * float64(state.totalKVBlocks)),
+			KVBlocks:       int64(cacheUsagePer * float64(totalKVBlocks)),
 			ActiveRequests: int64(running + swapped),
 			PrefillTokens:  0, // Passive reliance on Ledger Transit Debt math
 			DecodeTokens:   0, // Passive reliance on Ledger Transit Debt math

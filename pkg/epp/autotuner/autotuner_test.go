@@ -36,6 +36,10 @@ func (m *mockLedger) UpdateEndpointLimits(endpointID string, newLimits hyperviso
 	m.currentLimits = newLimits
 }
 
+func (m *mockLedger) UpdateEndpointKVBlocks(endpointID string, totalKVBlocks int64) {
+	m.currentLimits.KVBlocks = totalKVBlocks
+}
+
 func simulateHardware(limit int64, noise float64, peakThroughput float64, baseTPOT float64) datalayer.EpochDelta {
 	utilization := float64(limit) / peakThroughput
 

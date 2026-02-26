@@ -28,6 +28,8 @@ import (
 type mockEvaluator struct{}
 
 func (m *mockEvaluator) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed ResourceVector) {}
+func (m *mockEvaluator) SetKVBlocks(totalKVBlocks int64)                                       {}
+func (m *mockEvaluator) GetKVBlocks() int64                                                    { return 1000 }
 
 type mockMeta struct {
 	attr fwkdl.AttributeMap
@@ -44,10 +46,11 @@ func (m *mockMeta) GetAttributes() fwkdl.AttributeMap      { return m.attr }
 
 type mockEndpoint struct {
 	mockMeta
-	fwkdl.EndpointMetricsState
 }
 
-func (m *mockEndpoint) String() string { return "mock" }
+func (m *mockEndpoint) String() string                 { return "mock" }
+func (m *mockEndpoint) GetMetrics() *fwkdl.Metrics     { return &fwkdl.Metrics{} }
+func (m *mockEndpoint) UpdateMetrics(_ *fwkdl.Metrics) {}
 
 func TestTelemetryBridge(t *testing.T) {
 	t.Parallel()
@@ -59,7 +62,7 @@ func TestTelemetryBridge(t *testing.T) {
 	evaluator := &mockEvaluator{}
 
 	// "/test-ep" is what types.NamespacedName{Name: "test-ep"}.String() returns
-	bridge.RegisterEndpoint("/test-ep", deltaEngine, evaluator, 1000)
+	bridge.RegisterEndpoint("/test-ep", deltaEngine, evaluator)
 
 	if len(bridge.endpoints) != 1 {
 		t.Errorf("Expected 1 endpoint, got %d", len(bridge.endpoints))
@@ -81,7 +84,7 @@ func TestReconcile(t *testing.T) {
 	deltaEngine := &datalayer.PodDeltaEngine{}
 	evaluator := &mockEvaluator{}
 
-	bridge.RegisterEndpoint("/test-ep", deltaEngine, evaluator, 1000)
+	bridge.RegisterEndpoint("/test-ep", deltaEngine, evaluator)
 
 	attr := fwkdl.NewAttributes()
 	attr.Put("prometheus_vllm_generation_tokens_total", &generic.FloatValue{Value: 200.0})

@@ -280,6 +280,18 @@ func (l *TwoTierLedger) UpdateEndpointLimits(endpointID string, newLimits Resour
 	l.globalLimit.ActiveRequests.Add(newLimits.ActiveRequests - oldActive)
 }
 
+// UpdateEndpointKVBlocks propagates newly scraped physical KV Cache capacities.
+func (l *TwoTierLedger) UpdateEndpointKVBlocks(endpointID string, totalKVBlocks int64) {
+	value, ok := l.endpointLedgers.Load(endpointID)
+	if !ok {
+		value, _ = l.endpointLedgers.LoadOrStore(endpointID, &endpointLedger{})
+	}
+	endpoint := value.(*endpointLedger)
+
+	oldKV := endpoint.limit.KVBlocks.Swap(totalKVBlocks)
+	l.globalLimit.KVBlocks.Add(totalKVBlocks - oldKV)
+}
+
 // ReconcileEndpointCapacity incorporates official real-time state via a polled baseline overwrite.
 func (l *TwoTierLedger) ReconcileEndpointCapacity(endpointID string, scrapedUsage ResourceVector) {
 	value, ok := l.endpointLedgers.Load(endpointID)

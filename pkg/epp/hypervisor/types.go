@@ -86,6 +86,9 @@ type TokenLedger interface {
 	// This dictates the topological bounds of the routing grid.
 	UpdateEndpointLimits(endpointID string, newLimits ResourceVector)
 
+	// UpdateEndpointKVBlocks propagates newly scraped physical KV Cache capacities.
+	UpdateEndpointKVBlocks(endpointID string, totalKVBlocks int64)
+
 	// ReconcileEndpointCapacity incorporates authoritative real-time state via a polled baseline
 	// overwrite, propagating deltas synchronously upwards to the aggregate view.
 	ReconcileEndpointCapacity(endpointID string, scrapedUsage ResourceVector)

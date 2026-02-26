@@ -80,6 +80,14 @@ func NewPodAutoTuner(
 	}
 }
 
+func (t *PodAutoTuner) SetKVBlocks(totalKVBlocks int64) {
+	t.currentLimits.KVBlocks = totalKVBlocks
+}
+
+func (t *PodAutoTuner) GetKVBlocks() int64 {
+	return t.currentLimits.KVBlocks
+}
+
 func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hypervisor.ResourceVector) {
 	// --- Idle Tracking & TCP Slow-Start Reset ---
 	if delta.DeltaRequestSuccess == 0 && delta.ThroughputTokensSec == 0 {
