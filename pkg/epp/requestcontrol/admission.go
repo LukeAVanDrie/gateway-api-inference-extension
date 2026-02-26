@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/logging"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/estimator"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
@@ -154,6 +155,11 @@ func (fcac *FlowControlAdmissionController) Admit(
 	logger.V(logutil.TRACE).Info("Executing FlowControlAdmissionController",
 		"requestID", reqCtx.SchedulingRequest.RequestId, "priority", priority, "fairnessID", reqCtx.FairnessID)
 
+	heuristic := estimator.NewHeuristicEstimator()
+	promptTokens := heuristic.PredictPromptTokens(uint64(reqCtx.RequestSize))
+	reqBody := reqCtx.Request.Body
+	maxNewTokens := heuristic.PredictMaxNewTokens(reqBody)
+
 	fcReq := &flowControlRequest{
 		requestID:         reqCtx.SchedulingRequest.RequestId,
 		fairnessID:        reqCtx.FairnessID,
@@ -163,6 +169,8 @@ func (fcac *FlowControlAdmissionController) Admit(
 		inferencePoolName: fcac.poolName,
 		modelName:         reqCtx.IncomingModelName,
 		targetModelName:   reqCtx.TargetModelName,
+		promptTokens:      promptTokens,
+		maxNewTokens:      maxNewTokens,
 	}
 
 	outcome, err := fcac.flowController.EnqueueAndWait(ctx, fcReq)
@@ -181,6 +189,8 @@ type flowControlRequest struct {
 	inferencePoolName string
 	modelName         string
 	targetModelName   string
+	promptTokens      int64
+	maxNewTokens      int64
 }
 
 var _ flowcontrol.FlowControlRequest = &flowControlRequest{}
@@ -192,8 +202,8 @@ func (r *flowControlRequest) GetMetadata() map[string]any        { return r.reqM
 func (r *flowControlRequest) InferencePoolName() string          { return r.inferencePoolName }
 func (r *flowControlRequest) ModelName() string                  { return r.modelName }
 func (r *flowControlRequest) TargetModelName() string            { return r.targetModelName }
-func (r *flowControlRequest) PromptTokens() int64                { return 0 }
-func (r *flowControlRequest) MaxNewTokens() int64                { return 0 }
+func (r *flowControlRequest) PromptTokens() int64                { return r.promptTokens }
+func (r *flowControlRequest) MaxNewTokens() int64                { return r.maxNewTokens }
 func (r *flowControlRequest) FlowKey() flowcontrol.FlowKey {
 	return flowcontrol.FlowKey{ID: r.fairnessID, Priority: r.priority}
 }
