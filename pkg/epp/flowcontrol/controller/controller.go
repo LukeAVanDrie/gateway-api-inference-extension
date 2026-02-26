@@ -38,10 +38,12 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/logging"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/estimator"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/internal"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 )
 
@@ -62,7 +64,7 @@ type shardProcessor interface {
 type shardProcessorFactory func(
 	ctx context.Context,
 	shard contracts.RegistryShard,
-	saturationDetector contracts.SaturationDetector,
+	ledger hypervisor.TokenLedger,
 	podLocator contracts.PodLocator,
 	clock clock.WithTicker,
 	cleanupSweepInterval time.Duration,
@@ -98,8 +100,9 @@ type FlowController struct {
 
 	config                *Config
 	registry              registryClient
-	saturationDetector    contracts.SaturationDetector
+	ledger                hypervisor.TokenLedger
 	podLocator            contracts.PodLocator
+	estimator             estimator.TokenEstimator
 	clock                 clock.WithTicker
 	logger                logr.Logger
 	shardProcessorFactory shardProcessorFactory
@@ -130,24 +133,26 @@ func NewFlowController(
 	ctx context.Context,
 	config *Config,
 	registry contracts.FlowRegistry,
-	sd contracts.SaturationDetector,
+	ledger hypervisor.TokenLedger,
 	podLocator contracts.PodLocator,
+	est estimator.TokenEstimator,
 	opts ...flowControllerOption,
 ) (*FlowController, error) {
 	fc := &FlowController{
-		config:             config,
-		registry:           registry,
-		saturationDetector: sd,
-		podLocator:         podLocator,
-		clock:              clock.RealClock{},
-		logger:             log.FromContext(ctx).WithName("flow-controller"),
-		parentCtx:          ctx,
+		config:     config,
+		registry:   registry,
+		ledger:     ledger,
+		podLocator: podLocator,
+		estimator:  est,
+		clock:      clock.RealClock{},
+		logger:     log.FromContext(ctx).WithName("flow-controller"),
+		parentCtx:  ctx,
 	}
 
 	fc.shardProcessorFactory = func(
 		ctx context.Context,
 		shard contracts.RegistryShard,
-		saturationDetector contracts.SaturationDetector,
+		ledger hypervisor.TokenLedger,
 		podLocator contracts.PodLocator,
 		clock clock.WithTicker,
 		cleanupSweepInterval time.Duration,
@@ -157,7 +162,7 @@ func NewFlowController(
 		return internal.NewShardProcessor(
 			ctx,
 			shard,
-			saturationDetector,
+			ledger,
 			podLocator,
 			clock,
 			cleanupSweepInterval,
@@ -314,8 +319,35 @@ func (fc *FlowController) tryDistribution(
 		}
 	}
 
+	// Since all Endpoints naturally originate from the same inference pool, they are considered to
+	// have identical configurations. Therefore, using the CacheBlockSize value from the first
+	// dynamically located endpoint defaults the metric for the entire evaluation.
+	// TODO: Consider how to handle heterogeneous pools.
+	blockSize := int64(16) // Default fallback
+	if fc.podLocator != nil {
+		pods := fc.podLocator.Locate(reqCtx, req.GetMetadata())
+		if len(pods) > 0 {
+			if pm := pods[0]; pm != nil {
+				if metrics := pm.GetMetrics(); metrics != nil {
+					if bs := metrics.CacheBlockSize; bs > 0 {
+						blockSize = int64(bs)
+					}
+				}
+			}
+		}
+	}
+
+	worstCase := fc.estimator.Estimate(
+		req.FlowKey(),
+		req.TargetModelName(),
+		req.ModelName(),
+		req.PromptTokens(),
+		req.MaxNewTokens(),
+		blockSize,
+	)
+
 	// We must create a fresh FlowItem on each attempt as finalization is per-lifecycle.
-	item := internal.NewItem(req, effectiveTTL, enqueueTime)
+	item := internal.NewItem(req, worstCase, effectiveTTL, enqueueTime)
 
 	candidates, err := fc.selectDistributionCandidates(conn)
 	if err != nil {
@@ -324,7 +356,7 @@ func (fc *FlowController) tryDistribution(
 			outcome = types.QueueOutcomeRejectedCapacity
 		}
 		finalErr := fmt.Errorf("%w: request not accepted: %w", types.ErrRejected, err)
-		item.FinalizeWithOutcome(outcome, finalErr)
+		item.FinalizeWithOutcome(outcome, finalErr, nil)
 		return item, finalErr
 	}
 
@@ -342,7 +374,7 @@ func (fc *FlowController) tryDistribution(
 		item.Finalize(context.Cause(reqCtx))
 	} else { // e.g.,
 		finalErr = fmt.Errorf("%w: request not accepted: %w", types.ErrRejected, err)
-		item.FinalizeWithOutcome(outcome, finalErr)
+		item.FinalizeWithOutcome(outcome, finalErr, nil)
 	}
 	return item, finalErr
 }
@@ -483,7 +515,7 @@ func (fc *FlowController) getOrStartWorker(shard contracts.RegistryShard) *manag
 	processor := fc.shardProcessorFactory(
 		processorCtx,
 		shard,
-		fc.saturationDetector,
+		fc.ledger,
 		fc.podLocator,
 		fc.clock,
 		fc.config.ExpiryCleanupInterval,

@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 )
 
@@ -66,7 +67,7 @@ var ErrProcessorBusy = errors.New("shard processor is busy")
 // inherently atomic without coarse-grained locks.
 type ShardProcessor struct {
 	shard                contracts.RegistryShard
-	saturationDetector   contracts.SaturationDetector
+	ledger               hypervisor.TokenLedger
 	podLocator           contracts.PodLocator
 	clock                clock.WithTicker
 	cleanupSweepInterval time.Duration
@@ -88,7 +89,7 @@ type ShardProcessor struct {
 func NewShardProcessor(
 	ctx context.Context,
 	shard contracts.RegistryShard,
-	saturationDetector contracts.SaturationDetector,
+	ledger hypervisor.TokenLedger,
 	podLocator contracts.PodLocator,
 	clock clock.WithTicker,
 	cleanupSweepInterval time.Duration,
@@ -97,7 +98,7 @@ func NewShardProcessor(
 ) *ShardProcessor {
 	return &ShardProcessor{
 		shard:                shard,
-		saturationDetector:   saturationDetector,
+		ledger:               ledger,
 		podLocator:           podLocator,
 		clock:                clock,
 		cleanupSweepInterval: cleanupSweepInterval,
@@ -241,7 +242,7 @@ func (sp *ShardProcessor) enqueue(item *FlowItem) {
 	if err != nil {
 		finalErr := fmt.Errorf("configuration error: failed to get queue for flow key %s: %w", key, err)
 		sp.logger.Error(finalErr, "Rejecting item.", "flowKey", key, "reqID", req.ID())
-		item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, fmt.Errorf("%w: %w", types.ErrRejected, finalErr))
+		item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, fmt.Errorf("%w: %w", types.ErrRejected, finalErr), nil)
 		return
 	}
 
@@ -249,7 +250,7 @@ func (sp *ShardProcessor) enqueue(item *FlowItem) {
 	if err != nil {
 		finalErr := fmt.Errorf("configuration error: failed to get priority band for priority %d: %w", key.Priority, err)
 		sp.logger.Error(finalErr, "Rejecting item.", "flowKey", key, "reqID", req.ID())
-		item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, fmt.Errorf("%w: %w", types.ErrRejected, finalErr))
+		item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, fmt.Errorf("%w: %w", types.ErrRejected, finalErr), nil)
 		return
 	}
 
@@ -259,7 +260,7 @@ func (sp *ShardProcessor) enqueue(item *FlowItem) {
 		sp.logger.V(logutil.DEBUG).Info("Rejecting request, queue at capacity",
 			"flowKey", key, "reqID", req.ID(), "priorityName", band.PriorityName(), "reqByteSize", req.ByteSize())
 		item.FinalizeWithOutcome(types.QueueOutcomeRejectedCapacity, fmt.Errorf("%w: %w",
-			types.ErrRejected, types.ErrQueueAtCapacity))
+			types.ErrRejected, types.ErrQueueAtCapacity), nil)
 		return
 	}
 
@@ -269,7 +270,7 @@ func (sp *ShardProcessor) enqueue(item *FlowItem) {
 		finalErr := fmt.Errorf("failed to add item to queue for flow key %s: %w", key, err)
 		sp.logger.Error(finalErr, "Rejecting item post-admission.",
 			"flowKey", key, "reqID", req.ID(), "priorityName", band.PriorityName())
-		item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, fmt.Errorf("%w: %w", types.ErrRejected, finalErr))
+		item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, fmt.Errorf("%w: %w", types.ErrRejected, finalErr), nil)
 		return
 	}
 	sp.logger.V(logutil.TRACE).Info("Item enqueued.",
@@ -328,11 +329,12 @@ func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
 			continue
 		}
 
-		// --- Viability Check (Saturation/HoL Blocking) ---
+		// --- Viability Check (Proactive Capacity via Ledger) ---
 		req := item.OriginalRequest()
-		candidates := sp.podLocator.Locate(ctx, req.GetMetadata())
-		if sp.saturationDetector.Saturation(ctx, candidates) >= 1.0 {
-			sp.logger.V(logutil.DEBUG).Info("Policy's chosen item is saturated; enforcing HoL blocking.",
+		head := item.(*FlowItem)
+		holdReceipt, err := sp.ledger.TryAcquireHold(head.worstCaseVector)
+		if err != nil {
+			sp.logger.V(logutil.DEBUG).Info("Policy's chosen item fails capacity check; enforcing HoL blocking.",
 				"flowKey", req.FlowKey(), "reqID", req.ID(), "priorityName", originalBand.PriorityName())
 			// Stop the dispatch cycle entirely to respect strict policy decision and prevent priority inversion where
 			// lower-priority work might exacerbate the saturation affecting high-priority work.
@@ -340,9 +342,10 @@ func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
 		}
 
 		// --- Dispatch ---
-		if err := sp.dispatchItem(item); err != nil {
+		if err := sp.dispatchItem(item, holdReceipt); err != nil {
 			sp.logger.Error(err, "Failed to dispatch item, skipping priority band for this cycle",
 				"flowKey", req.FlowKey(), "reqID", req.ID(), "priorityName", originalBand.PriorityName())
+			sp.ledger.ReleaseHold(holdReceipt)
 			continue // Continue to the next band to maximize work conservation.
 		}
 		return true
@@ -372,7 +375,7 @@ func (sp *ShardProcessor) selectItem(
 }
 
 // dispatchItem handles the final steps of dispatching an item: removing it from the queue and finalizing its outcome.
-func (sp *ShardProcessor) dispatchItem(itemAcc flowcontrol.QueueItemAccessor) error {
+func (sp *ShardProcessor) dispatchItem(itemAcc flowcontrol.QueueItemAccessor, receipt *hypervisor.HoldReceipt) error {
 	req := itemAcc.OriginalRequest()
 	key := req.FlowKey()
 	managedQ, err := sp.shard.ManagedQueue(key)
@@ -391,7 +394,7 @@ func (sp *ShardProcessor) dispatchItem(itemAcc flowcontrol.QueueItemAccessor) er
 
 	removedItem := removedItemAcc.(*FlowItem)
 	sp.logger.V(logutil.TRACE).Info("Item dispatched.", "flowKey", req.FlowKey(), "reqID", req.ID())
-	removedItem.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+	removedItem.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, receipt)
 	return nil
 }
 
@@ -446,7 +449,7 @@ func (sp *ShardProcessor) shutdown() {
 				}
 				// Finalize buffered items.
 				item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther,
-					fmt.Errorf("%w: %w", types.ErrRejected, types.ErrFlowControllerNotRunning))
+					fmt.Errorf("%w: %w", types.ErrRejected, types.ErrFlowControllerNotRunning), nil)
 			default:
 				break DrainLoop
 			}
@@ -474,7 +477,7 @@ func (sp *ShardProcessor) evictAll() {
 			}
 
 			// Finalization is idempotent; safe to call even if already finalized externally.
-			item.FinalizeWithOutcome(outcome, errShutdown)
+			item.FinalizeWithOutcome(outcome, errShutdown, nil)
 			logger.V(logutil.TRACE).Info("Item evicted during shutdown.",
 				"reqID", item.OriginalRequest().ID())
 		}

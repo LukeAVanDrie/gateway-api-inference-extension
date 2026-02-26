@@ -34,6 +34,8 @@ type MockFlowControlRequest struct {
 	InferencePoolNameV   string
 	ModelNameV           string
 	TargetModelNameV     string
+	PromptTokensV        int64
+	MaxNewTokensV        int64
 }
 
 // MockRequestOption is a functional option for configuring a MockFlowControlRequest.
@@ -57,6 +59,20 @@ func WithModelName(name string) MockRequestOption {
 func WithTargetModelName(name string) MockRequestOption {
 	return func(m *MockFlowControlRequest) {
 		m.TargetModelNameV = name
+	}
+}
+
+// WithPromptTokens sets the PromptTokens for the mock request.
+func WithPromptTokens(tokens int64) MockRequestOption {
+	return func(m *MockFlowControlRequest) {
+		m.PromptTokensV = tokens
+	}
+}
+
+// WithMaxNewTokens sets the MaxNewTokens for the mock request.
+func WithMaxNewTokens(tokens int64) MockRequestOption {
+	return func(m *MockFlowControlRequest) {
+		m.MaxNewTokensV = tokens
 	}
 }
 
@@ -89,6 +105,8 @@ func (m *MockFlowControlRequest) GetMetadata() map[string]any        { return m.
 func (m *MockFlowControlRequest) InferencePoolName() string          { return m.InferencePoolNameV }
 func (m *MockFlowControlRequest) ModelName() string                  { return m.ModelNameV }
 func (m *MockFlowControlRequest) TargetModelName() string            { return m.TargetModelNameV }
+func (m *MockFlowControlRequest) PromptTokens() int64                { return m.PromptTokensV }
+func (m *MockFlowControlRequest) MaxNewTokens() int64                { return m.MaxNewTokensV }
 
 var _ flowcontrol.FlowControlRequest = &MockFlowControlRequest{}
 

@@ -27,6 +27,7 @@ import (
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 )
 
@@ -34,6 +35,7 @@ import (
 type FinalState struct {
 	Outcome types.QueueOutcome
 	Err     error
+	Receipt *hypervisor.HoldReceipt
 }
 
 // FlowItem is the internal representation of a request managed by the Flow Controller.
@@ -54,6 +56,7 @@ type FlowItem struct {
 	enqueueTime     time.Time
 	effectiveTTL    time.Duration
 	originalRequest flowcontrol.FlowControlRequest
+	worstCaseVector hypervisor.ResourceVector
 
 	// --- Synchronized State ---
 
@@ -81,11 +84,12 @@ type FlowItem struct {
 var _ flowcontrol.QueueItemAccessor = &FlowItem{}
 
 // NewItem allocates and initializes a new FlowItem for a request lifecycle.
-func NewItem(req flowcontrol.FlowControlRequest, effectiveTTL time.Duration, enqueueTime time.Time) *FlowItem {
+func NewItem(req flowcontrol.FlowControlRequest, worstCase hypervisor.ResourceVector, effectiveTTL time.Duration, enqueueTime time.Time) *FlowItem {
 	return &FlowItem{
 		enqueueTime:     enqueueTime,
 		effectiveTTL:    effectiveTTL,
 		originalRequest: req,
+		worstCaseVector: worstCase,
 		done:            make(chan *FinalState, 1),
 	}
 }
@@ -131,7 +135,7 @@ func (fi *FlowItem) Finalize(cause error) {
 		// This synchronization is critical for correctly inferring the outcome across goroutines.
 		isQueued := fi.Handle() != nil
 		outcome, finalErr := inferOutcome(cause, isQueued)
-		fi.finalizeInternal(outcome, finalErr)
+		fi.finalizeInternal(outcome, finalErr, nil)
 	})
 }
 
@@ -140,18 +144,20 @@ func (fi *FlowItem) Finalize(cause error) {
 // This method is intended for synchronous finalization by the Processor (Dispatch, Reject) or the Controller
 // (Distribution failure).
 // It is idempotent.
-func (fi *FlowItem) FinalizeWithOutcome(outcome types.QueueOutcome, err error) {
+// Expected method prototype is now accepting the Receipt.
+func (fi *FlowItem) FinalizeWithOutcome(outcome types.QueueOutcome, err error, receipt *hypervisor.HoldReceipt) {
 	fi.onceFinalize.Do(func() {
-		fi.finalizeInternal(outcome, err)
+		fi.finalizeInternal(outcome, err, receipt)
 	})
 }
 
 // finalizeInternal is the core finalization logic. It must be called within the sync.Once.Do block.
 // It captures the state, stores it atomically, and signals the Done channel.
-func (fi *FlowItem) finalizeInternal(outcome types.QueueOutcome, err error) {
+func (fi *FlowItem) finalizeInternal(outcome types.QueueOutcome, err error, receipt *hypervisor.HoldReceipt) {
 	finalState := &FinalState{
 		Outcome: outcome,
 		Err:     err,
+		Receipt: receipt,
 	}
 
 	// Atomically store the pointer. This is the critical memory barrier that publishes the state safely.

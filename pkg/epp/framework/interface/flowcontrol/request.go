@@ -37,6 +37,12 @@ type FlowControlRequest interface {
 	// for managing byte-based capacity limits and for `contracts.FlowRegistry` statistics.
 	ByteSize() uint64
 
+	// PromptTokens returns the total prompt (prefill) tokens for this request.
+	PromptTokens() int64
+
+	// MaxNewTokens returns the maximum requested new tokens (decode) for this request.
+	MaxNewTokens() int64
+
 	// InitialEffectiveTTL returns the suggested Time-To-Live for this request.
 	// This value is treated as a hint; the `controller.FlowController` may override it based on its own configuration or
 	// policies. A zero value indicates the request has no specific TTL preference, and a system-wide default should be

@@ -40,6 +40,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	fwmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 )
 
 const (
@@ -70,11 +71,11 @@ type testHarness struct {
 	startSignal chan struct{}
 
 	// Core components under test
-	processor          *ShardProcessor
-	clock              *testclock.FakeClock
-	logger             logr.Logger
-	saturationDetector *mocks.MockSaturationDetector
-	podLocator         *mocks.MockPodLocator
+	processor  *ShardProcessor
+	clock      *testclock.FakeClock
+	logger     logr.Logger
+	ledger     *mockTokenLedger
+	podLocator *mocks.MockPodLocator
 
 	// --- Centralized Mock State ---
 	// The harness's mutex protects the single source of truth for all mock state.
@@ -90,15 +91,15 @@ type testHarness struct {
 func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarness {
 	t.Helper()
 	h := &testHarness{
-		t:                  t,
-		MockRegistryShard:  &mocks.MockRegistryShard{},
-		clock:              testclock.NewFakeClock(time.Now()),
-		logger:             logr.Discard(),
-		saturationDetector: &mocks.MockSaturationDetector{},
-		podLocator:         &mocks.MockPodLocator{Pods: []metrics.PodMetrics{&metrics.FakePodMetrics{}}},
-		startSignal:        make(chan struct{}),
-		queues:             make(map[flowcontrol.FlowKey]*mocks.MockManagedQueue),
-		priorityFlows:      make(map[int][]flowcontrol.FlowKey),
+		t:                 t,
+		MockRegistryShard: &mocks.MockRegistryShard{},
+		clock:             testclock.NewFakeClock(time.Now()),
+		logger:            logr.Discard(),
+		ledger:            &mockTokenLedger{},
+		podLocator:        &mocks.MockPodLocator{Pods: []metrics.PodMetrics{&metrics.FakePodMetrics{}}},
+		startSignal:       make(chan struct{}),
+		queues:            make(map[flowcontrol.FlowKey]*mocks.MockManagedQueue),
+		priorityFlows:     make(map[int][]flowcontrol.FlowKey),
 	}
 	h.ctx, h.cancel = context.WithCancel(context.Background())
 
@@ -121,7 +122,7 @@ func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarn
 	h.processor = NewShardProcessor(
 		h.ctx,
 		h,
-		h.saturationDetector,
+		h.ledger,
 		h.podLocator,
 		h.clock,
 		expiryCleanupInterval,
@@ -179,7 +180,7 @@ func (h *testHarness) waitForFinalization(item *FlowItem) (types.QueueOutcome, e
 func (h *testHarness) newTestItem(id string, key flowcontrol.FlowKey, ttl time.Duration) *FlowItem {
 	h.t.Helper()
 	req := fwmocks.NewMockFlowControlRequest(100, id, key)
-	return NewItem(req, ttl, h.clock.Now())
+	return NewItem(req, hypervisor.ResourceVector{}, ttl, h.clock.Now())
 }
 
 // addQueue centrally registers a new mock queue for a given flow, ensuring all harness components are aware of it.
@@ -616,7 +617,7 @@ func TestShardProcessor(t *testing.T) {
 					item: func() *FlowItem {
 						// Create a pre-finalized item.
 						item := newTestHarness(t, 0).newTestItem("req-finalized", testFlow, testTTL)
-						item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+						item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 						return item
 					}(),
 					assert: func(t *testing.T, h *testHarness, item *FlowItem) {
@@ -738,8 +739,8 @@ func TestShardProcessor(t *testing.T) {
 							qLow := h.addQueue(keyLow)
 							require.NoError(t, qLow.Add(h.newTestItem("item-low", keyLow, testTTL)))
 
-							h.saturationDetector.SaturationFunc = func(_ context.Context, _ []metrics.PodMetrics) float64 {
-								return 1.0 // Saturated
+							h.ledger.TryAcquireHoldFunc = func(_ hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error) {
+								return nil, hypervisor.ErrGlobalCapacityExceeded
 							}
 						},
 						expectDidDispatch: false,
@@ -907,7 +908,8 @@ func TestShardProcessor(t *testing.T) {
 						h := newTestHarness(t, testCleanupTick)
 						tc.setupMocks(h)
 						item := h.newTestItem("req-dispatch-fail", testFlow, testTTL)
-						err := h.processor.dispatchItem(item)
+						receipt := &hypervisor.HoldReceipt{}
+						err := h.processor.dispatchItem(item, receipt)
 						require.Error(t, err, "dispatchItem should return an error")
 						assert.ErrorIs(t, err, tc.expectedErr, "The underlying registry error should be preserved")
 					})
@@ -919,7 +921,7 @@ func TestShardProcessor(t *testing.T) {
 				// --- ARRANGE ---
 				h := newTestHarness(t, testCleanupTick)
 				item := h.newTestItem("req-already-finalized", testFlow, testTTL)
-				item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, errors.New("already done"))
+				item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, errors.New("already done"), nil)
 
 				h.ManagedQueueFunc = func(flowcontrol.FlowKey) (contracts.ManagedQueue, error) {
 					return &mocks.MockManagedQueue{
@@ -930,7 +932,7 @@ func TestShardProcessor(t *testing.T) {
 				}
 
 				// --- ACT ---
-				err := h.processor.dispatchItem(item)
+				err := h.processor.dispatchItem(item, &hypervisor.HoldReceipt{})
 
 				// --- ASSERT ---
 				require.NoError(t, err, "dispatchItem should return no error for an already finalized item")
@@ -1168,4 +1170,16 @@ func TestShardProcessor(t *testing.T) {
 			})
 		})
 	})
+}
+
+type mockTokenLedger struct {
+	hypervisor.TokenLedger
+	TryAcquireHoldFunc func(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error)
+}
+
+func (m *mockTokenLedger) TryAcquireHold(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error) {
+	if m.TryAcquireHoldFunc != nil {
+		return m.TryAcquireHoldFunc(worstCase)
+	}
+	return &hypervisor.HoldReceipt{}, nil
 }

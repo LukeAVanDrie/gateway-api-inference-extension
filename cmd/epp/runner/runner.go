@@ -53,6 +53,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/config/loader"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datalayer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datastore"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/estimator"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	fccontroller "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller"
@@ -72,6 +73,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/predictedlatency"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/prefix"
 	testfilter "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/test/filter"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics/collectors"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/requestcontrol"
@@ -336,11 +338,24 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to initialize Flow Registry: %w", err)
 		}
+		est, err := estimator.NewHierarchicalEstimator(
+			1024, // l1CacheSize
+			0.25, // alpha (EMA decay factor)
+			1.1,  // safetyMargin (10% overhead)
+			10,   // minSamples (minimum samples before relying on EMA)
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to initialize Estimator: %w", err)
+		}
+		ledger := &hypervisor.TwoTierLedger{}
+		go ledger.RunMasterTick(ctx)
 		fc, err := fccontroller.NewFlowController(
 			ctx,
 			eppConfig.FlowControlConfig.Controller,
-			registry, saturationDetector,
+			registry,
+			ledger,
 			locator,
+			est,
 		)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to initialize Flow Controller: %w", err)

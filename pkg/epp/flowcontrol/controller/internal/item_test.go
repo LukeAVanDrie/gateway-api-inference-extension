@@ -28,6 +28,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 )
 
 func TestFlowItem_New(t *testing.T) {
@@ -35,7 +36,7 @@ func TestFlowItem_New(t *testing.T) {
 	req := mocks.NewMockFlowControlRequest(100, "req-1", flowcontrol.FlowKey{})
 
 	enqueueTime := time.Now()
-	item := NewItem(req, time.Minute, enqueueTime)
+	item := NewItem(req, hypervisor.ResourceVector{}, time.Minute, enqueueTime)
 
 	require.NotNil(t, item, "NewItem should not return a nil item")
 	assert.Equal(t, enqueueTime, item.EnqueueTime(), "EnqueueTime should be populated")
@@ -87,7 +88,7 @@ func TestFlowItem_Finalize_Idempotency(t *testing.T) {
 				item.Finalize(types.ErrTTLExpired)
 			},
 			secondCall: func(item *FlowItem) {
-				item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+				item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 			},
 			expectedOutcome: types.QueueOutcomeRejectedOther,
 			expectedErrIs:   types.ErrTTLExpired,
@@ -95,10 +96,10 @@ func TestFlowItem_Finalize_Idempotency(t *testing.T) {
 		{
 			name: "FinalizeWithOutcome then FinalizeWithOutcome",
 			firstCall: func(item *FlowItem) {
-				item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+				item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 			},
 			secondCall: func(item *FlowItem) {
-				item.FinalizeWithOutcome(types.QueueOutcomeRejectedCapacity, errors.New("rejected"))
+				item.FinalizeWithOutcome(types.QueueOutcomeRejectedCapacity, errors.New("rejected"), nil)
 			},
 			expectedOutcome: types.QueueOutcomeDispatched,
 			expectedErrIs:   nil,
@@ -106,7 +107,7 @@ func TestFlowItem_Finalize_Idempotency(t *testing.T) {
 		{
 			name: "FinalizeWithOutcome then Finalize",
 			firstCall: func(item *FlowItem) {
-				item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+				item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 			},
 			secondCall: func(item *FlowItem) {
 				item.Finalize(types.ErrTTLExpired)
@@ -119,7 +120,7 @@ func TestFlowItem_Finalize_Idempotency(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			item := NewItem(req, time.Minute, now)
+			item := NewItem(req, hypervisor.ResourceVector{}, time.Minute, now)
 
 			// First call
 			tc.firstCall(item)
@@ -220,7 +221,7 @@ func TestFlowItem_Finalize_InferOutcome(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			req := mocks.NewMockFlowControlRequest(100, "req-1", flowcontrol.FlowKey{})
-			item := NewItem(req, time.Minute, now)
+			item := NewItem(req, hypervisor.ResourceVector{}, time.Minute, now)
 			if tc.isQueued {
 				item.SetHandle(&mocks.MockQueueItemHandle{})
 			}

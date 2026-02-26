@@ -37,12 +37,14 @@ import (
 	"k8s.io/utils/clock"
 	testclock "k8s.io/utils/clock/testing"
 
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/estimator"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts/mocks"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/internal"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	frameworkmocks "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol/mocks"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 )
 
 // --- Test Harness & Fixtures ---
@@ -115,7 +117,7 @@ func newUnitHarness(
 		opt(harnessOpts)
 	}
 
-	mockDetector := &mocks.MockSaturationDetector{}
+	mockDetector := &mockTokenLedger{}
 	mockPodLocator := &mocks.MockPodLocator{}
 
 	mockProcessorFactory := &mockShardProcessorFactory{
@@ -132,7 +134,7 @@ func newUnitHarness(
 		withClock(harnessOpts.clock),
 		withShardProcessorFactory(mockProcessorFactory.new),
 	}
-	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, mockPodLocator, fcOpts...)
+	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, mockPodLocator, &mockTokenEstimator{}, fcOpts...)
 	require.NoError(t, err, "failed to create FlowController for unit test harness")
 
 	h := &testHarness{
@@ -154,7 +156,7 @@ func newUnitHarness(
 // validating the controller-processor interaction.
 func newIntegrationHarness(t *testing.T, ctx context.Context, cfg *Config, registry *mockRegistryClient) *testHarness {
 	t.Helper()
-	mockDetector := &mocks.MockSaturationDetector{}
+	mockDetector := &mockTokenLedger{}
 	mockPodLocator := &mocks.MockPodLocator{}
 
 	// Align FakeClock with system time. See explanation in newUnitHarness.
@@ -167,7 +169,7 @@ func newIntegrationHarness(t *testing.T, ctx context.Context, cfg *Config, regis
 		withRegistryClient(registry),
 		withClock(mockClock),
 	}
-	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, mockPodLocator, opts...)
+	fc, err := NewFlowController(ctx, cfg, registry, mockDetector, mockPodLocator, &mockTokenEstimator{}, opts...)
 	require.NoError(t, err, "failed to create FlowController for integration test harness")
 
 	h := &testHarness{
@@ -276,7 +278,7 @@ type mockShardProcessorFactory struct {
 func (f *mockShardProcessorFactory) new(
 	_ context.Context, // The factory does not use the lifecycle context; it's passed to the processor's Run method later.
 	shard contracts.RegistryShard,
-	_ contracts.SaturationDetector,
+	_ hypervisor.TokenLedger,
 	_ contracts.PodLocator,
 	_ clock.WithTicker,
 	_ time.Duration,
@@ -498,7 +500,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 					h.mockProcessorFactory.processors["shard-A"] = &mockShardProcessor{
 						SubmitFunc: func(item *internal.FlowItem) error {
 							// Simulate asynchronous processing and successful dispatch.
-							go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+							go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 							return nil
 						},
 					}
@@ -521,7 +523,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 					h.mockProcessorFactory.processors["shard-B"] = &mockShardProcessor{
 						SubmitFunc: func(item *internal.FlowItem) error {
 							item.SetHandle(&frameworkmocks.MockQueueItemHandle{})
-							go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+							go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 							return nil
 						},
 					}
@@ -544,7 +546,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 						SubmitFunc: func(_ *internal.FlowItem) error { return internal.ErrProcessorBusy },
 						SubmitOrBlockFunc: func(_ context.Context, item *internal.FlowItem) error {
 							// The blocking call succeeds.
-							go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+							go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 							return nil
 						},
 					}
@@ -748,14 +750,14 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 				SubmitFunc: func(item *internal.FlowItem) error {
 					// The processor accepts the item but then asynchronously finalizes it with ErrShardDraining.
 					item.SetHandle(&frameworkmocks.MockQueueItemHandle{})
-					go item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, contracts.ErrShardDraining)
+					go item.FinalizeWithOutcome(types.QueueOutcomeRejectedOther, contracts.ErrShardDraining, nil)
 					return nil
 				},
 			}
 			// Configure Shard B's processor to successfully dispatch the request on the retry.
 			h.mockProcessorFactory.processors["shard-B"] = &mockShardProcessor{
 				SubmitFunc: func(item *internal.FlowItem) error {
-					go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+					go item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 					return nil
 				},
 			}
@@ -966,7 +968,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 					// Block until the test allows us to proceed.
 					select {
 					case <-unblockProcessor:
-						item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil)
+						item.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, nil)
 						return nil
 					case <-ctx.Done():
 						return ctx.Err()
@@ -1140,7 +1142,7 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 		h.fc.shardProcessorFactory = func(
 			ctx context.Context, // The context created by getOrStartWorker for the potential new processor.
 			shard contracts.RegistryShard,
-			_ contracts.SaturationDetector,
+			_ hypervisor.TokenLedger,
 			_ contracts.PodLocator,
 			_ clock.WithTicker,
 			_ time.Duration,
@@ -1436,4 +1438,24 @@ func TestFlowController_Concurrency_Backpressure(t *testing.T) {
 	}
 	require.Equal(t, numRequests, successCount,
 		"all concurrent requests should be dispatched successfully even under high contention and zero buffer capacity")
+}
+
+type mockTokenEstimator struct {
+	estimator.TokenEstimator
+}
+
+func (m *mockTokenEstimator) Estimate(flow flowcontrol.FlowKey, targetModel, baseModel string, promptTokens, maxNewTokens int64, blockSize int64) hypervisor.ResourceVector {
+	return hypervisor.ResourceVector{}
+}
+
+type mockTokenLedger struct {
+	hypervisor.TokenLedger
+	TryAcquireHoldFunc func(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error)
+}
+
+func (m *mockTokenLedger) TryAcquireHold(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error) {
+	if m.TryAcquireHoldFunc != nil {
+		return m.TryAcquireHoldFunc(worstCase)
+	}
+	return &hypervisor.HoldReceipt{}, nil
 }

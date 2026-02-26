@@ -192,6 +192,8 @@ func (r *flowControlRequest) GetMetadata() map[string]any        { return r.reqM
 func (r *flowControlRequest) InferencePoolName() string          { return r.inferencePoolName }
 func (r *flowControlRequest) ModelName() string                  { return r.modelName }
 func (r *flowControlRequest) TargetModelName() string            { return r.targetModelName }
+func (r *flowControlRequest) PromptTokens() int64                { return 0 }
+func (r *flowControlRequest) MaxNewTokens() int64                { return 0 }
 func (r *flowControlRequest) FlowKey() flowcontrol.FlowKey {
 	return flowcontrol.FlowKey{ID: r.fairnessID, Priority: r.priority}
 }
