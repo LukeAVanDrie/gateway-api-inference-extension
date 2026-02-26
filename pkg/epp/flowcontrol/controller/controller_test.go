@@ -380,7 +380,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 				types.ErrTTLExpired)
 			defer cancel()
 
-			outcome, err := h.fc.EnqueueAndWait(reqCtx, req)
+			outcome, _, err := h.fc.EnqueueAndWait(reqCtx, req)
 			require.Error(t, err, "EnqueueAndWait must fail if request context deadline is exceeded")
 			assert.ErrorIs(t, err, types.ErrRejected, "error should wrap ErrRejected")
 			assert.ErrorIs(t, err, types.ErrTTLExpired, "error should wrap types.ErrTTLExpired from the context cause")
@@ -399,7 +399,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 
 			req := newTestRequest(defaultFlowKey)
 			// The request context is valid, but the controller itself is stopped.
-			outcome, err := h.fc.EnqueueAndWait(context.Background(), req)
+			outcome, _, err := h.fc.EnqueueAndWait(context.Background(), req)
 			require.Error(t, err, "EnqueueAndWait must reject requests if controller is not running")
 			assert.ErrorIs(t, err, types.ErrRejected, "error should wrap ErrRejected")
 			assert.ErrorIs(t, err, types.ErrFlowControllerNotRunning, "error should wrap ErrFlowControllerNotRunning")
@@ -413,7 +413,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			h := newUnitHarness(t, t.Context(), &Config{}, nil)
 
 			req := newTestRequest(defaultFlowKey)
-			outcome, err := h.fc.EnqueueAndWait(context.Background(), req)
+			outcome, _, err := h.fc.EnqueueAndWait(context.Background(), req)
 			require.Error(t, err, "EnqueueAndWait must reject requests if no shards are available")
 			assert.ErrorIs(t, err, types.ErrRejected, "error should wrap ErrRejected")
 			assert.Equal(t, types.QueueOutcomeRejectedCapacity, outcome,
@@ -435,7 +435,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			}
 
 			req := newTestRequest(defaultFlowKey)
-			outcome, err := h.fc.EnqueueAndWait(context.Background(), req)
+			outcome, _, err := h.fc.EnqueueAndWait(context.Background(), req)
 			require.Error(t, err, "EnqueueAndWait must reject requests if registry connection fails")
 			assert.ErrorIs(t, err, types.ErrRejected, "error should wrap ErrRejected")
 			assert.ErrorIs(t, err, expectedErr, "error should wrap the underlying connection error")
@@ -467,7 +467,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			}
 
 			req := newTestRequest(defaultFlowKey)
-			outcome, err := h.fc.EnqueueAndWait(context.Background(), req)
+			outcome, _, err := h.fc.EnqueueAndWait(context.Background(), req)
 			require.Error(t, err, "EnqueueAndWait must reject requests if no shards are available")
 			assert.ErrorIs(t, err, types.ErrRejected, "error should wrap ErrRejected")
 			assert.Equal(t, types.QueueOutcomeRejectedCapacity, outcome,
@@ -643,7 +643,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 
 				startTime := time.Now() // Capture real start time for duration checks.
 				// Use a background context for the parent; the request lifecycle is governed by the config/derived context.
-				outcome, err = h.fc.EnqueueAndWait(context.Background(), newTestRequest(defaultFlowKey))
+				outcome, _, err = h.fc.EnqueueAndWait(context.Background(), newTestRequest(defaultFlowKey))
 
 				// Assert
 				if tc.expectErr {
@@ -705,7 +705,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			// We use real time sleep here as we are testing external cancellation signals interacting with the context.
 			go func() { time.Sleep(10 * time.Millisecond); cancelReq() }()
 
-			outcome, err := h.fc.EnqueueAndWait(reqCtx, newTestRequest(defaultFlowKey))
+			outcome, _, err := h.fc.EnqueueAndWait(reqCtx, newTestRequest(defaultFlowKey))
 
 			require.Error(t, err, "EnqueueAndWait must fail when context is cancelled during a blocking submit")
 			assert.ErrorIs(t, err, types.ErrRejected, "error should wrap ErrRejected")
@@ -763,7 +763,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			}
 
 			// Act
-			outcome, err := h.fc.EnqueueAndWait(context.Background(), newTestRequest(defaultFlowKey))
+			outcome, _, err := h.fc.EnqueueAndWait(context.Background(), newTestRequest(defaultFlowKey))
 
 			// Assert
 			require.NoError(t, err, "EnqueueAndWait must succeed after retrying on a healthy shard")
@@ -811,7 +811,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			var err error
 			done := make(chan struct{})
 			go func() {
-				outcome, err = h.fc.EnqueueAndWait(reqCtx, req)
+				outcome, _, err = h.fc.EnqueueAndWait(reqCtx, req)
 				close(done)
 			}()
 
@@ -892,7 +892,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 
 			startTime := time.Now() // Capture start time to validate duration.
 			go func() {
-				outcome, err = h.fc.EnqueueAndWait(enqueueCtx, req)
+				outcome, _, err = h.fc.EnqueueAndWait(enqueueCtx, req)
 				close(done)
 			}()
 
@@ -978,7 +978,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 
 			// 3. Run EnqueueAndWait in the background.
 			go func() {
-				_, _ = h.fc.EnqueueAndWait(context.Background(), newTestRequest(defaultFlowKey))
+				_, _, _ = h.fc.EnqueueAndWait(context.Background(), newTestRequest(defaultFlowKey))
 			}()
 
 			// 4. Wait for the request to enter the queue (Blocking phase).
@@ -1348,7 +1348,7 @@ func TestFlowController_Concurrency_Distribution(t *testing.T) {
 				defer cancel()
 
 				ctx := logr.NewContext(reqCtx, logr.Discard())
-				outcome, err := h.fc.EnqueueAndWait(ctx, req)
+				outcome, _, err := h.fc.EnqueueAndWait(ctx, req)
 				if err != nil {
 					// Use t.Errorf for concurrent tests to report failures without halting execution.
 					t.Errorf("EnqueueAndWait failed unexpectedly under load: %v", err)
@@ -1418,7 +1418,7 @@ func TestFlowController_Concurrency_Backpressure(t *testing.T) {
 				reqCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 				defer cancel()
 
-				outcome, err := h.fc.EnqueueAndWait(logr.NewContext(reqCtx, logr.Discard()), req)
+				outcome, _, err := h.fc.EnqueueAndWait(logr.NewContext(reqCtx, logr.Discard()), req)
 				if err != nil {
 					t.Errorf("EnqueueAndWait failed unexpectedly under backpressure for request %s: %v", req.ID(), err)
 				}

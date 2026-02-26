@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
 )
@@ -58,7 +59,7 @@ type AdmissionController interface {
 // flowController defines the minimal interface required by FlowControlAdmissionController for enqueuing requests and
 // waiting for an admission outcome.
 type flowController interface {
-	EnqueueAndWait(ctx context.Context, req flowcontrol.FlowControlRequest) (types.QueueOutcome, error)
+	EnqueueAndWait(ctx context.Context, req flowcontrol.FlowControlRequest) (types.QueueOutcome, *hypervisor.HoldReceipt, error)
 }
 
 // rejectIfSheddableAndSaturated checks if a request should be immediately rejected.
@@ -173,7 +174,8 @@ func (fcac *FlowControlAdmissionController) Admit(
 		maxNewTokens:      maxNewTokens,
 	}
 
-	outcome, err := fcac.flowController.EnqueueAndWait(ctx, fcReq)
+	outcome, receipt, err := fcac.flowController.EnqueueAndWait(ctx, fcReq)
+	reqCtx.HoldReceipt = receipt
 	logger.V(logutil.DEBUG).Info("Flow control outcome",
 		"requestID", reqCtx.SchedulingRequest.RequestId, "outcome", outcome, "error", err)
 	return translateFlowControlOutcome(outcome, err)

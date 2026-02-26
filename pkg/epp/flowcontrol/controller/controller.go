@@ -217,7 +217,7 @@ func (fc *FlowController) run(ctx context.Context) {
 func (fc *FlowController) EnqueueAndWait(
 	ctx context.Context,
 	req flowcontrol.FlowControlRequest,
-) (types.QueueOutcome, error) {
+) (types.QueueOutcome, *hypervisor.HoldReceipt, error) {
 	flowKey := req.FlowKey()
 	priority := strconv.Itoa(flowKey.Priority)
 	reqBytes := req.ByteSize()
@@ -243,6 +243,7 @@ func (fc *FlowController) EnqueueAndWait(
 	defer cancel()
 
 	var finalOutcome types.QueueOutcome
+	var finalReceipt *hypervisor.HoldReceipt
 
 	// 2. Acquire a lease for the Flow.
 	// We hold this lease for the entire duration of the request (Distribution + Queueing).
@@ -266,13 +267,14 @@ func (fc *FlowController) EnqueueAndWait(
 				// The item has already been finalized by tryDistribution.
 				finalState := item.FinalState()
 				finalOutcome = finalState.Outcome
+				finalReceipt = finalState.Receipt
 				return finalState.Err
 			}
 
 			// Distribution was successful; ownership of the item has been transferred to a processor.
 			// Now, we block here in awaitFinalization until the request is finalized by either the processor (e.g., dispatched,
 			// rejected) or the controller itself (e.g., caller's context cancelled/TTL expired).
-			outcome, err := fc.awaitFinalization(reqCtx, item)
+			outcome, receipt, err := fc.awaitFinalization(reqCtx, item)
 			if errors.Is(err, contracts.ErrShardDraining) {
 				// This is a benign race condition where the chosen shard started draining after acceptance.
 				fc.logger.V(logutil.DEBUG).Info("Selected shard is Draining, retrying request distribution",
@@ -286,6 +288,7 @@ func (fc *FlowController) EnqueueAndWait(
 
 			// The outcome is terminal (Dispatched, Evicted, or a non-retriable rejection).
 			finalOutcome = outcome
+			finalReceipt = receipt
 			return err
 		}
 	})
@@ -294,10 +297,10 @@ func (fc *FlowController) EnqueueAndWait(
 	// return a valid rejection outcome.
 	// In the success case (where the closure ran), finalOutcome is set inside the closure.
 	if err != nil && finalOutcome == types.QueueOutcomeNotYetFinalized {
-		return types.QueueOutcomeRejectedOther, fmt.Errorf("%w: %w", types.ErrRejected, err)
+		return types.QueueOutcomeRejectedOther, nil, fmt.Errorf("%w: %w", types.ErrRejected, err)
 	}
 
-	return finalOutcome, err
+	return finalOutcome, finalReceipt, err
 }
 
 var errNoShards = errors.New("no viable active shards available")
@@ -384,7 +387,7 @@ func (fc *FlowController) tryDistribution(
 func (fc *FlowController) awaitFinalization(
 	reqCtx context.Context,
 	item *internal.FlowItem,
-) (types.QueueOutcome, error) {
+) (types.QueueOutcome, *hypervisor.HoldReceipt, error) {
 	select {
 	case <-reqCtx.Done():
 		// Asynchronous Finalization (Controller-initiated):
@@ -394,12 +397,12 @@ func (fc *FlowController) awaitFinalization(
 
 		// The processor will eventually discard this "zombie" item during its cleanup sweep.
 		finalState := item.FinalState()
-		return finalState.Outcome, finalState.Err
+		return finalState.Outcome, finalState.Receipt, finalState.Err
 
 	case finalState := <-item.Done():
 		// Synchronous Finalization (Processor-initiated):
 		// The processor finalized the item (Dispatch, Reject, Shutdown).
-		return finalState.Outcome, finalState.Err
+		return finalState.Outcome, finalState.Receipt, finalState.Err
 	}
 }
 

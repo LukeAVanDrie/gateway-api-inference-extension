@@ -37,7 +37,9 @@ import (
 	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 	fwk "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/requestcontrol"
 	fwksched "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
+	attrprefix "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
@@ -66,6 +68,7 @@ type Scheduler interface {
 
 // NewDirectorWithConfig creates a new Director instance with all dependencies.
 func NewDirectorWithConfig(
+	ledger hypervisor.TokenLedger,
 	datastore Datastore,
 	scheduler Scheduler,
 	admissionController AdmissionController,
@@ -73,6 +76,7 @@ func NewDirectorWithConfig(
 	config *Config,
 ) *Director {
 	return &Director{
+		ledger:                ledger,
 		datastore:             datastore,
 		scheduler:             scheduler,
 		admissionController:   admissionController,
@@ -92,6 +96,7 @@ func NewDirectorWithConfig(
 // - Preparing the request context for the Envoy ext_proc filter to route the request.
 // - Running PostResponse plugins.
 type Director struct {
+	ledger                hypervisor.TokenLedger
 	datastore             Datastore
 	scheduler             Scheduler
 	admissionController   AdmissionController
@@ -169,7 +174,17 @@ func (d *Director) HandleRequest(ctx context.Context, reqCtx *handlers.RequestCo
 		logger.V(logutil.DEFAULT).Info("Request rejected by admission control", "error", err)
 		return reqCtx, err
 	}
+
 	candidatePods := d.podLocator.Locate(ctx, reqCtx.Request.Metadata)
+
+	// Step 2 & 4: Deferred Release + Ledger Commitment
+	var commitReceipt *hypervisor.CommitReceipt
+	defer func() {
+		if commitReceipt == nil && reqCtx.HoldReceipt != nil {
+			logger.V(logutil.DEBUG).Info("Releasing HoldReceipt due to failure")
+			d.ledger.ReleaseHold(reqCtx.HoldReceipt)
+		}
+	}()
 	if len(candidatePods) == 0 {
 		return reqCtx, errutil.Error{
 			Code: errutil.ServiceUnavailable,
@@ -193,6 +208,44 @@ func (d *Director) HandleRequest(ctx context.Context, reqCtx *handlers.RequestCo
 	result, err := d.scheduler.Schedule(ctx, reqCtx.SchedulingRequest, snapshotOfCandidatePods)
 	if err != nil {
 		return reqCtx, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: fmt.Errorf("failed to find target pod: %w", err).Error()}
+	}
+
+	if result == nil || len(result.ProfileResults) == 0 {
+		return reqCtx, errutil.Error{Code: errutil.Internal, Msg: "result must be greater than zero"}
+	}
+
+	primaryProfile := result.ProfileResults[result.PrimaryProfileName]
+	if primaryProfile == nil || len(primaryProfile.TargetEndpoints) == 0 {
+		return reqCtx, errutil.Error{Code: errutil.InferencePoolResourceExhausted, Msg: "no target endpoint found in primary profile"}
+	}
+	targetEndpoint := primaryProfile.TargetEndpoints[0]
+	endpointID := targetEndpoint.GetMetadata().NamespacedName.String()
+
+	if reqCtx.HoldReceipt != nil {
+		// Step 3: Discount resources in actualCost based on Prefix Cache matches (Stubs)
+		actualCost := reqCtx.HoldReceipt.Held
+
+		if matchInfoRaw, ok := targetEndpoint.Get(attrprefix.PrefixCacheMatchInfoKey); ok {
+			if matchInfo, ok := matchInfoRaw.(*attrprefix.PrefixCacheMatchInfo); ok {
+				totalBlocks := matchInfo.TotalBlocks()
+				if totalBlocks > 0 {
+					score := float64(matchInfo.MatchBlocks()) / float64(totalBlocks)
+					logger.V(logutil.DEBUG).Info("Applying prefix cache match discount to actualCost", "score", score)
+					actualCost.KVBlocks = int64(float64(actualCost.KVBlocks) * (1.0 - score))
+				}
+			}
+		}
+
+		// Step 4: Call ledger.Commit with the chosen endpoint and calculated actualCost.
+		cr, err := d.ledger.Commit(endpointID, actualCost, reqCtx.HoldReceipt)
+		if err != nil {
+			logger.Error(err, "failed to commit to ledger")
+			return reqCtx, errutil.Error{Code: errutil.Internal, Msg: "failed to commit resources to ledger"}
+		}
+		commitReceipt = cr
+
+		// Inject the CommitReceipt into the RequestContext
+		reqCtx.CommitReceipt = cr
 	}
 
 	// Prepare Request (Populates RequestContext and call PreRequest plugins)
@@ -319,6 +372,13 @@ func (d *Director) HandleResponseBodyComplete(ctx context.Context, reqCtx *handl
 		Headers:         reqCtx.Response.Headers,
 		DynamicMetadata: reqCtx.Response.DynamicMetadata,
 		Usage:           reqCtx.Usage,
+	}
+
+	// If a CommitReceipt exists, we must release the temporal capacity back to the ledger.
+	if reqCtx.CommitReceipt != nil && reqCtx.TargetPod != nil {
+		endpointID := reqCtx.TargetPod.NamespacedName.String()
+		d.ledger.ReleaseEndpointCapacity(endpointID, reqCtx.CommitReceipt)
+		logger.V(logutil.DEBUG).Info("Released hypervisor endpoint capacity", "endpoint", endpointID)
 	}
 
 	d.runResponseCompletePlugins(ctx, reqCtx.SchedulingRequest, response, reqCtx.TargetPod)

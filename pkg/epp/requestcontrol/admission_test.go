@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 )
 
@@ -45,9 +46,9 @@ type mockFlowController struct {
 func (m *mockFlowController) EnqueueAndWait(
 	_ context.Context,
 	_ flowcontrol.FlowControlRequest,
-) (fctypes.QueueOutcome, error) {
+) (fctypes.QueueOutcome, *hypervisor.HoldReceipt, error) {
 	m.called = true
-	return m.outcome, m.err
+	return m.outcome, &hypervisor.HoldReceipt{}, m.err
 }
 
 // --- Legacy Controller Tests ---

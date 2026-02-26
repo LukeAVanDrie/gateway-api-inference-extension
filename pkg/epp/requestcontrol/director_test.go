@@ -47,6 +47,7 @@ import (
 	fwk "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/requestcontrol"
 	fwksched "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	poolutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/pool"
 	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
@@ -65,6 +66,25 @@ type mockAdmissionController struct {
 
 func (m *mockAdmissionController) Admit(context.Context, *handlers.RequestContext, int) error {
 	return m.admitErr
+}
+
+type mockTokenLedger struct {
+	hypervisor.TokenLedger
+}
+
+func (m *mockTokenLedger) RunMasterTick(ctx context.Context) {}
+func (m *mockTokenLedger) TryAcquireHold(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error) {
+	return &hypervisor.HoldReceipt{Held: worstCase}, nil
+}
+func (m *mockTokenLedger) ReleaseHold(receipt *hypervisor.HoldReceipt) {}
+func (m *mockTokenLedger) Commit(endpointID string, actualCost hypervisor.ResourceVector, receipt *hypervisor.HoldReceipt) (*hypervisor.CommitReceipt, error) {
+	return &hypervisor.CommitReceipt{}, nil
+}
+func (m *mockTokenLedger) ReleaseEndpointCapacity(endpointID string, receipt *hypervisor.CommitReceipt) {
+}
+func (m *mockTokenLedger) UpdateEndpointConfig(endpointID string, cfg hypervisor.EndpointConfig) {}
+func (m *mockTokenLedger) RemoveEndpoint(endpointID string)                                      {}
+func (m *mockTokenLedger) ReconcileEndpointCapacity(endpointID string, scrapedUsage hypervisor.ResourceVector) {
 }
 
 type mockScheduler struct {
@@ -643,6 +663,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
 				mockSched := &mockScheduler{}
+				mockLedger := &mockTokenLedger{}
 				if test.schedulerMockSetup != nil {
 					test.schedulerMockSetup(mockSched)
 				}
@@ -653,7 +674,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 				config = config.WithAdmissionPlugins(newMockAdmissionPlugin("test-admit-plugin", test.admitRequestDenialError))
 
 				locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(ds), time.Minute)
-				director := NewDirectorWithConfig(ds, mockSched, test.mockAdmissionController, locator, config)
+				director := NewDirectorWithConfig(mockLedger, ds, mockSched, test.mockAdmissionController, locator, config)
 				if test.name == "successful request with model rewrite" {
 					mockDs := &mockDatastore{
 						pods:     ds.PodList(datastore.AllPodsPredicate),
@@ -959,7 +980,8 @@ func TestDirector_ApplyWeightedModelRewrite(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			mockDs := &mockDatastore{rewrites: test.rewrites}
 			locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(mockDs), time.Minute)
-			director := NewDirectorWithConfig(mockDs, &mockScheduler{}, &mockAdmissionController{}, locator, NewConfig())
+			mockLedger := &mockTokenLedger{}
+			director := NewDirectorWithConfig(mockLedger, mockDs, &mockScheduler{}, &mockAdmissionController{}, locator, NewConfig())
 
 			reqCtx := &handlers.RequestContext{
 				IncomingModelName: test.incomingModel,
@@ -1059,8 +1081,10 @@ func TestDirector_HandleResponseReceived(t *testing.T) {
 	ctx := logutil.NewTestLoggerIntoContext(context.Background())
 	ds := datastore.NewDatastore(t.Context(), nil, 0)
 	mockSched := &mockScheduler{}
+	mockLedger := &mockTokenLedger{}
 	locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(ds), time.Minute)
 	director := NewDirectorWithConfig(
+		mockLedger,
 		ds,
 		mockSched,
 		&mockAdmissionController{},
@@ -1103,8 +1127,9 @@ func TestDirector_HandleResponseStreaming(t *testing.T) {
 	ctx := logutil.NewTestLoggerIntoContext(context.Background())
 	ds := datastore.NewDatastore(t.Context(), nil, 0)
 	mockSched := &mockScheduler{}
+	mockLedger := &mockTokenLedger{}
 	locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(ds), time.Minute)
-	director := NewDirectorWithConfig(ds, mockSched, nil, locator, NewConfig().WithResponseStreamingPlugins(ps1))
+	director := NewDirectorWithConfig(mockLedger, ds, mockSched, nil, locator, NewConfig().WithResponseStreamingPlugins(ps1))
 
 	reqCtx := &handlers.RequestContext{
 		Request: &handlers.Request{
@@ -1140,8 +1165,9 @@ func TestDirector_HandleResponseComplete(t *testing.T) {
 	ctx := logutil.NewTestLoggerIntoContext(context.Background())
 	ds := datastore.NewDatastore(t.Context(), nil, 0)
 	mockSched := &mockScheduler{}
+	mockLedger := &mockTokenLedger{}
 	locator := NewCachedPodLocator(context.Background(), NewDatastorePodLocator(ds), time.Minute)
-	director := NewDirectorWithConfig(ds, mockSched, nil, locator, NewConfig().WithResponseCompletePlugins(pc1))
+	director := NewDirectorWithConfig(mockLedger, ds, mockSched, nil, locator, NewConfig().WithResponseCompletePlugins(pc1))
 
 	reqCtx := &handlers.RequestContext{
 		Request: &handlers.Request{
