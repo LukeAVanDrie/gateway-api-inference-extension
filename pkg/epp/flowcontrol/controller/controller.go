@@ -163,6 +163,7 @@ func NewFlowController(
 			shard,
 			ledger,
 			podLocator,
+			fc.estimator,
 			clock,
 			cleanupSweepInterval,
 			enqueueChannelBufferSize,

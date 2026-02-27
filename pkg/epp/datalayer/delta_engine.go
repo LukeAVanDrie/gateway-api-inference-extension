@@ -63,6 +63,8 @@ type EpochDelta struct {
 	Duration            time.Duration
 }
 
+const maxWindowMultiplier = 3 // Force flush after 3x the epoch window.
+
 // EndpointDeltaEngine maintains temporal boundaries and calculates epoch deltas for a single endpoint.
 // It absorbs cumulative scraping jitter by advancing the execution window only once enough time has
 // elapsed, converting raw cumulative metrics into rate deltas.
@@ -70,15 +72,19 @@ type EndpointDeltaEngine struct {
 	mu          sync.Mutex
 	lastEpoch   EpochSnapshot
 	epochWindow time.Duration
+	minSamples  uint64
 }
 
 // NewEndpointDeltaEngine initializes the time-series bridge for a newly discovered endpoint.
 // epochWindow defines the observation period (e.g., 2 seconds) used to decouple the metrics
 // analysis frequency from the raw Extractor plugin tick frequency, making control-theory
 // calculations resilient to metrics collection jitter.
-func NewEndpointDeltaEngine(epochWindow time.Duration) *EndpointDeltaEngine {
+// minSamples defines the minimum sample volume required before a window is allowed to tumble,
+// enabling Elastic Window behaviors.
+func NewEndpointDeltaEngine(epochWindow time.Duration, minSamples uint64) *EndpointDeltaEngine {
 	return &EndpointDeltaEngine{
 		epochWindow: epochWindow,
+		minSamples:  minSamples,
 	}
 }
 
@@ -127,13 +133,24 @@ func (e *EndpointDeltaEngine) UpdateScrape(scrape EpochSnapshot) *EpochDelta {
 		return nil
 	}
 
-	// Calculate latency percentiles matching our tuning goals: P50 for queue dynamics, and P90 for
-	// standard user SLA tracking (tail latency).
+	deltaReqs := scrape.RequestSuccessTotal - e.lastEpoch.RequestSuccessTotal
+
+	// The Elastic Window with Hard Timeout
+	// - Tumble if we are completely idle (deltaReqs == 0) to allow idle resets.
+	// - Tumble if we have statistical confidence (deltaReqs >= minSamples).
+	// - Tumble if the window has been open for too long (elapsed >= maxWindowDuration) to prevent jams.
+	// - Otherwise, extend the window and return nil.
+	maxWindowDuration := e.epochWindow * maxWindowMultiplier
+	if deltaReqs > 0 && deltaReqs < e.minSamples && elapsed < maxWindowDuration {
+		return nil
+	}
+
+	// Tumble! Calculate latency percentiles and throughput...
 	delta := &EpochDelta{
 		P90TPOT:             CalculateQuantile(0.90, e.lastEpoch.TPOTHistogram, scrape.TPOTHistogram),
 		P50TTFT:             CalculateQuantile(0.50, e.lastEpoch.TTFTHistogram, scrape.TTFTHistogram),
 		P50Prefill:          CalculateQuantile(0.50, e.lastEpoch.PrefillHistogram, scrape.PrefillHistogram),
-		DeltaRequestSuccess: scrape.RequestSuccessTotal - e.lastEpoch.RequestSuccessTotal,
+		DeltaRequestSuccess: deltaReqs,
 		Duration:            elapsed,
 	}
 

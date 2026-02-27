@@ -282,18 +282,4 @@ func TestEdgeCases(t *testing.T) {
 		t.Errorf("Floor failure: Limits were allowed to be less than 1. Decode: %d, Prefill: %d", ledger.currentLimits.DecodeTokens, ledger.currentLimits.PrefillTokens)
 	}
 
-	// 6. Statistical Noise Governor (Governor 1): Ignore epoch without enough requests
-	noiseDelta := datalayer.EpochDelta{
-		DeltaRequestSuccess: 1, // Below min threshold
-		ThroughputTokensSec: 1000,
-		P90TPOT:             0.05,
-	}
-	tuner.currentLimits = hypervisor.ResourceVector{DecodeTokens: 1000, PrefillTokens: 1000, KVBlocks: 1000}
-	ledger.currentLimits = hypervisor.ResourceVector{DecodeTokens: 1000, PrefillTokens: 1000, KVBlocks: 1000}
-
-	tuner.EvaluateEpoch(&noiseDelta, hypervisor.ResourceVector{KVBlocks: 0})
-
-	if ledger.currentLimits.DecodeTokens != 1000 {
-		t.Errorf("Statistical Noise Governor failure: Limits tuned despite low sample count, got %d", ledger.currentLimits.DecodeTokens)
-	}
 }

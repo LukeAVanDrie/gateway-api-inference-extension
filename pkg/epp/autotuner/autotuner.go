@@ -142,18 +142,11 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 
 	t.lastTrafficTime = t.clock()
 
-	// Governor 1: Statistical Noise.
-	// We require a minimum sample size to trust the P50/P90 math.
-	// If the data is sparse, or if the metrics engine returned NaN, we freeze the tuning state.
-	if delta.DeltaRequestSuccess < t.config.MinSuccessSamples {
-		return
-	}
-
-	// Governor 2: Congestion Window Validation (CWV).
+	// Governor 1: Congestion Window Validation (CWV).
 	// Are we demand-bound rather than hardware-bound?
 	isUnderutilized := delta.ThroughputTokensSec < (t.maxThroughput * t.config.UtilizationThreshold)
 
-	// Governor 3: Spatial VRAM Saturation.
+	// Governor 2: Spatial VRAM Saturation.
 	// Are we out of physical PagedAttention blocks?
 	isKVBlocked := false
 	if t.currentLimits.KVBlocks > 0 {

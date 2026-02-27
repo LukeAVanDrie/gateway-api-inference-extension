@@ -69,6 +69,7 @@ type ShardProcessor struct {
 	shard                contracts.RegistryShard
 	ledger               hypervisor.AdmissionLedger
 	podLocator           contracts.PodLocator
+	estimator            hypervisor.TokenEstimator
 	clock                clock.WithTicker
 	cleanupSweepInterval time.Duration
 	logger               logr.Logger
@@ -91,6 +92,7 @@ func NewShardProcessor(
 	shard contracts.RegistryShard,
 	ledger hypervisor.AdmissionLedger,
 	podLocator contracts.PodLocator,
+	estimator hypervisor.TokenEstimator,
 	clock clock.WithTicker,
 	cleanupSweepInterval time.Duration,
 	enqueueChannelBufferSize int,
@@ -100,6 +102,7 @@ func NewShardProcessor(
 		shard:                shard,
 		ledger:               ledger,
 		podLocator:           podLocator,
+		estimator:            estimator,
 		clock:                clock,
 		cleanupSweepInterval: cleanupSweepInterval,
 		logger:               logger,
@@ -331,8 +334,31 @@ func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
 
 		// --- Viability Check (Proactive Capacity via Ledger) ---
 		req := item.OriginalRequest()
-		head := item.(*FlowItem)
-		holdReceipt, err := sp.ledger.TryAcquireHold(context.Background(), head.worstCaseVector)
+
+		blockSize := int64(16) // Default fallback
+		if sp.podLocator != nil {
+			pods := sp.podLocator.Locate(ctx, req.GetMetadata())
+			if len(pods) > 0 {
+				if pm := pods[0]; pm != nil {
+					if metrics := pm.GetMetrics(); metrics != nil {
+						if bs := metrics.CacheBlockSize; bs > 0 {
+							blockSize = int64(bs)
+						}
+					}
+				}
+			}
+		}
+
+		dynamicWorstCase := sp.estimator.Estimate(
+			req.FlowKey(),
+			req.TargetModelName(),
+			req.ModelName(),
+			req.PromptTokens(),
+			req.MaxNewTokens(),
+			blockSize,
+		)
+
+		holdReceipt, err := sp.ledger.TryAcquireHold(context.Background(), dynamicWorstCase)
 		if err != nil {
 			sp.logger.V(logutil.DEBUG).Info("Policy's chosen item fails capacity check; enforcing HoL blocking.",
 				"flowKey", req.FlowKey(), "reqID", req.ID(), "priorityName", originalBand.PriorityName())

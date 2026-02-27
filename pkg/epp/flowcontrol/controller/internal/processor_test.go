@@ -124,6 +124,7 @@ func newTestHarness(t *testing.T, expiryCleanupInterval time.Duration) *testHarn
 		h,
 		h.ledger,
 		h.podLocator,
+		&mockTokenEstimator{},
 		h.clock,
 		expiryCleanupInterval,
 		100,
@@ -1181,4 +1182,13 @@ func (m *mockTokenLedger) TryAcquireHold(ctx context.Context, worstCase hypervis
 		return m.TryAcquireHoldFunc(worstCase)
 	}
 	return hypervisor.HoldReceipt{}, nil
+}
+
+type mockTokenEstimator struct{}
+
+func (m *mockTokenEstimator) Estimate(flowKey flowcontrol.FlowKey, targetModel, baseModel string, promptTokens, maxNewTokens int64, blockSize int64) hypervisor.ResourceVector {
+	return hypervisor.ResourceVector{}
+}
+
+func (m *mockTokenEstimator) Observe(flow flowcontrol.FlowKey, targetModel, baseModel string, actualGeneratedTokens int64) {
 }

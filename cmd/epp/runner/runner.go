@@ -690,9 +690,9 @@ func (t *TelemetryFacilitator) NewEndpoint(ctx context.Context, meta *fwkdl.Endp
 	ep := t.EndpointFactory.NewEndpoint(ctx, meta, info)
 	if ep != nil {
 		endpointID := ep.GetMetadata().NamespacedName.String()
-		deltaEngine := datalayer.NewEndpointDeltaEngine(2 * time.Second)
-
 		tunerConfig := autotuner.DefaultTunerConfig()
+		deltaEngine := datalayer.NewEndpointDeltaEngine(2*time.Second, tunerConfig.MinSuccessSamples)
+
 		autoTuner := autotuner.NewPodAutoTuner(endpointID, tunerConfig, t.bridge.Ledger(), tunerConfig.DefaultLimits)
 
 		t.bridge.RegisterEndpoint(endpointID, deltaEngine, autoTuner)

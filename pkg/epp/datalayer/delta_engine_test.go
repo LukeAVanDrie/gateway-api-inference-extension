@@ -28,7 +28,7 @@ import (
 
 func TestNewEndpointDeltaEngine(t *testing.T) {
 	window := 2 * time.Second
-	engine := NewEndpointDeltaEngine(window)
+	engine := NewEndpointDeltaEngine(window, 0)
 	require.NotNil(t, engine, "Engine should be initialized")
 	assert.Equal(t, window, engine.epochWindow, "Target epoch window should be properly assigned")
 }
@@ -148,7 +148,7 @@ func TestCalculateQuantile(t *testing.T) {
 
 func TestUpdateScrape_TemporalBoundary(t *testing.T) {
 	window := 2 * time.Second
-	engine := NewEndpointDeltaEngine(window)
+	engine := NewEndpointDeltaEngine(window, 0)
 
 	now := time.Now()
 	first := EpochSnapshot{
@@ -176,7 +176,7 @@ func TestUpdateScrape_TemporalBoundary(t *testing.T) {
 
 func TestUpdateScrape_CounterReset(t *testing.T) {
 	window := 2 * time.Second
-	engine := NewEndpointDeltaEngine(window)
+	engine := NewEndpointDeltaEngine(window, 0)
 
 	now := time.Now()
 	first := EpochSnapshot{
@@ -205,7 +205,7 @@ func TestUpdateScrape_CounterReset(t *testing.T) {
 
 func TestUpdateScrape_TransitionToZeroIgnoresOmission(t *testing.T) {
 	window := 2 * time.Second
-	engine := NewEndpointDeltaEngine(window)
+	engine := NewEndpointDeltaEngine(window, 0)
 
 	now := time.Now()
 	require.Nil(t, engine.UpdateScrape(makeSnapshot(now, 500)), "Initial scrape establishes baseline")
@@ -232,7 +232,7 @@ func TestUpdateScrape_TransitionToZeroIgnoresOmission(t *testing.T) {
 
 func TestUpdateScrape_Concurrency(t *testing.T) {
 	window := 2 * time.Second
-	engine := NewEndpointDeltaEngine(window)
+	engine := NewEndpointDeltaEngine(window, 0)
 
 	now := time.Now()
 	first := EpochSnapshot{
@@ -268,7 +268,7 @@ func makeSnapshot(timestamp time.Time, tokens uint64) EpochSnapshot {
 }
 
 func BenchmarkUpdateScrape(b *testing.B) {
-	engine := NewEndpointDeltaEngine(2 * time.Second)
+	engine := NewEndpointDeltaEngine(2*time.Second, 0)
 	now := time.Now()
 
 	first := makeSnapshot(now, 100)

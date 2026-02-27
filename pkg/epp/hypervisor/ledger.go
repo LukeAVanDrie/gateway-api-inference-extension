@@ -152,6 +152,39 @@ func (l *TwoTierLedger) TryAcquireHold(ctx context.Context, worstCase ResourceVe
 	l.admissionMu.Lock()
 	defer l.admissionMu.Unlock()
 
+	checkSpatialAll := func(hold, scraped, t1, t2, limit *atomicResourceVector, worst ResourceVector) bool {
+		_hold := hold.load()
+		_scraped := scraped.load()
+		_t1 := t1.load()
+		_t2 := t2.load()
+		_limit := limit.load()
+
+		return ((_hold.KVBlocks+_scraped.KVBlocks+_t1.KVBlocks+_t2.KVBlocks+worst.KVBlocks) > _limit.KVBlocks ||
+			(_hold.ActiveRequests+_scraped.ActiveRequests+_t1.ActiveRequests+_t2.ActiveRequests+worst.ActiveRequests) > _limit.ActiveRequests)
+	}
+
+	checkThroughputAll := func(hold, tracked, limit *atomicResourceVector, worst ResourceVector) bool {
+		_hold := hold.load()
+		_tracked := tracked.load()
+		_limit := limit.load()
+
+		return ((_hold.PrefillTokens+_tracked.PrefillTokens+worst.PrefillTokens) > _limit.PrefillTokens ||
+			(_hold.DecodeTokens+_tracked.DecodeTokens+worst.DecodeTokens) > _limit.DecodeTokens)
+	}
+
+	// 1. O(1) Global Aggregate Checks First
+	// Evaluate bounds and return early on saturation.
+	if checkSpatialAll(
+		&l.globalHold, &l.globalScraped,
+		&l.globalTransit[idx], &l.globalTransit[prevIdx],
+		&l.globalLimit, worstCase,
+	) || checkThroughputAll(
+		&l.globalHold, &l.globalTracking,
+		&l.globalLimit, worstCase,
+	) {
+		return HoldReceipt{}, ErrGlobalCapacityExceeded
+	}
+
 	// Proactively ensure at least one backend can theoretically fit the request to prevent holding
 	// global capacity for a payload that cannot be scheduled.
 	hasCapacity := false
@@ -179,38 +212,6 @@ func (l *TwoTierLedger) TryAcquireHold(ctx context.Context, worstCase ResourceVe
 	})
 
 	if !hasCapacity {
-		return HoldReceipt{}, ErrGlobalCapacityExceeded
-	}
-
-	checkSpatialAll := func(hold, scraped, t1, t2, limit *atomicResourceVector, worst ResourceVector) bool {
-		_hold := hold.load()
-		_scraped := scraped.load()
-		_t1 := t1.load()
-		_t2 := t2.load()
-		_limit := limit.load()
-
-		return ((_hold.KVBlocks+_scraped.KVBlocks+_t1.KVBlocks+_t2.KVBlocks+worst.KVBlocks) > _limit.KVBlocks ||
-			(_hold.ActiveRequests+_scraped.ActiveRequests+_t1.ActiveRequests+_t2.ActiveRequests+worst.ActiveRequests) > _limit.ActiveRequests)
-	}
-
-	checkThroughputAll := func(hold, tracked, limit *atomicResourceVector, worst ResourceVector) bool {
-		_hold := hold.load()
-		_tracked := tracked.load()
-		_limit := limit.load()
-
-		return ((_hold.PrefillTokens+_tracked.PrefillTokens+worst.PrefillTokens) > _limit.PrefillTokens ||
-			(_hold.DecodeTokens+_tracked.DecodeTokens+worst.DecodeTokens) > _limit.DecodeTokens)
-	}
-
-	// Evaluate bounds and return early on saturation.
-	if checkSpatialAll(
-		&l.globalHold, &l.globalScraped,
-		&l.globalTransit[idx], &l.globalTransit[prevIdx],
-		&l.globalLimit, worstCase,
-	) || checkThroughputAll(
-		&l.globalHold, &l.globalTracking,
-		&l.globalLimit, worstCase,
-	) {
 		return HoldReceipt{}, ErrGlobalCapacityExceeded
 	}
 
