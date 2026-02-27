@@ -78,7 +78,7 @@ func DefaultTunerConfig() TunerConfig {
 		IncreaseRatio:          1.05,
 		DecreaseRatio:          0.80,
 		BackoffRatio:           0.98,
-		DeadbandRatio:          0.02,
+		DeadbandRatio:          0.05,
 		UtilizationThreshold:   0.60,
 		HighWaterDecay:         0.995,
 		MinSuccessSamples:      5,
@@ -163,7 +163,9 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 	}
 
 	// --- Governor 2: Adaptive High-Water Mark & Underutilization Freeze ---
-	isUnderutilized := delta.ThroughputTokensSec < (float64(t.currentLimits.DecodeTokens) * t.config.UtilizationThreshold)
+	isSaturated := delta.P90TPOT > float64(t.config.TargetTPOT.Seconds())
+	isUnderutilized := delta.ThroughputTokensSec < (t.maxThroughput * t.config.UtilizationThreshold)
+
 	if delta.ThroughputTokensSec > t.maxThroughput {
 		t.maxThroughput = delta.ThroughputTokensSec
 	} else if !isUnderutilized {
@@ -174,8 +176,8 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 	}
 
 	// If throughput is less than X% of our known max, we are demand-bound, not hardware-bound.
-	// Do not tune limits based on low client demand.
-	if isUnderutilized {
+	// Do not tune limits based on low client demand, unless we are actively saturated.
+	if isUnderutilized && !isSaturated {
 		return
 	}
 

@@ -204,6 +204,9 @@ func TestEdgeCases(t *testing.T) {
 	ledger := &mockLedger{currentLimits: hypervisor.ResourceVector{DecodeTokens: 1000, PrefillTokens: 1000, KVBlocks: 1000}}
 	tuner := NewPodAutoTuner("test-ep", getBaseConfig(), ledger, hypervisor.ResourceVector{DecodeTokens: 1000, PrefillTokens: 1000, KVBlocks: 1000})
 
+	tuner.inSlowStart = false    // Disable slow start for governor tests
+	tuner.maxThroughput = 5000.0 // Give it a theoretical peak to test underutilization against
+
 	// 1. Underutilization (Governor 2): Limits should not decrease or increase because it's in demand backoff.
 	underutilDelta := datalayer.EpochDelta{
 		DeltaRequestSuccess: 10,
@@ -226,6 +229,9 @@ func TestEdgeCases(t *testing.T) {
 		t.Errorf("KV Safety Override failure: limits tuned despite 95%% utilization, got %d", ledger.currentLimits.DecodeTokens)
 	}
 
+	// Reset utilization logic so we are NOT underutilized
+	tuner.maxThroughput = 1000.0
+
 	// 3. Queue backing up (Prefill PI Decrement): TTL exceeds limit
 	queueDelta := datalayer.EpochDelta{
 		DeltaRequestSuccess: 10,
@@ -245,6 +251,9 @@ func TestEdgeCases(t *testing.T) {
 
 	// Exiting Slow Start
 	tuner.inSlowStart = false
+
+	// Reset utilization logic so we are NOT underutilized
+	tuner.maxThroughput = 1000.0
 
 	// 4. Additive Increase via Math.Ceil (DecodeTokens = 1 -> should go to 2+)
 	increaseDelta := datalayer.EpochDelta{

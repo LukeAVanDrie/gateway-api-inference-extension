@@ -75,6 +75,8 @@ type TwoTierLedger struct {
 	globalEpoch atomic.Uint64 // Monotonically increasing temporal epoch (1 tick = 50ms)
 
 	endpointLedgers sync.Map // map[string]*endpointLedger
+
+	transitMu sync.RWMutex // Protects temporal epoch transitions from late-binding racers
 }
 
 // RunMasterTick should be launched in a background goroutine on startup.
@@ -88,6 +90,7 @@ func (l *TwoTierLedger) RunMasterTick(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			l.transitMu.Lock()
 			// Monotonically advance the epoch to permanently prevent bucket aliasing.
 			newEpoch := l.globalEpoch.Add(1)
 
@@ -108,6 +111,7 @@ func (l *TwoTierLedger) RunMasterTick(ctx context.Context) {
 
 				return true
 			})
+			l.transitMu.Unlock()
 		}
 	}
 }
@@ -212,13 +216,14 @@ func (l *TwoTierLedger) Commit(endpointID string, actualCost ResourceVector, rec
 	}
 	endpoint := value.(*endpointLedger)
 
-	epoch := l.globalEpoch.Load()
-	idx := epoch % 3
-
 	endpoint.endpointTracking.PrefillTokens.Add(actualCost.PrefillTokens)
 	endpoint.endpointTracking.DecodeTokens.Add(actualCost.DecodeTokens)
 	l.globalTracking.PrefillTokens.Add(actualCost.PrefillTokens)
 	l.globalTracking.DecodeTokens.Add(actualCost.DecodeTokens)
+
+	l.transitMu.RLock()
+	epoch := l.globalEpoch.Load()
+	idx := epoch % 3
 
 	// Apply localized dimensions safely.
 	endpoint.mu.Lock()
@@ -226,9 +231,9 @@ func (l *TwoTierLedger) Commit(endpointID string, actualCost ResourceVector, rec
 	endpoint.transitBuckets[idx].ActiveRequests += actualCost.ActiveRequests
 	endpoint.mu.Unlock()
 
-	// Apply global dimensions entirely lock-free.
 	l.globalTransit[idx].KVBlocks.Add(actualCost.KVBlocks)
 	l.globalTransit[idx].ActiveRequests.Add(actualCost.ActiveRequests)
+	l.transitMu.RUnlock()
 
 	return &CommitReceipt{
 		ActualCost: actualCost,
@@ -255,6 +260,7 @@ func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *Comm
 	l.globalTracking.DecodeTokens.Add(-receipt.ActualCost.DecodeTokens)
 
 	// Temporal window reconciliation
+	l.transitMu.RLock()
 	endpoint.mu.Lock()
 	currentEpoch := l.globalEpoch.Load()
 	shouldSubtract := (currentEpoch - receipt.Epoch) < 2
@@ -271,6 +277,7 @@ func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *Comm
 		subAtomicNoNegative(&l.globalTransit[idx].KVBlocks, receipt.ActualCost.KVBlocks)
 		subAtomicNoNegative(&l.globalTransit[idx].ActiveRequests, receipt.ActualCost.ActiveRequests)
 	}
+	l.transitMu.RUnlock()
 }
 
 func subAtomicNoNegative(val *atomic.Int64, delta int64) {
