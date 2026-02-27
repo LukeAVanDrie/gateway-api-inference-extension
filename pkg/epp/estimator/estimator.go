@@ -234,6 +234,9 @@ func updateEMA(state *emaState, actual int64, alpha float64) {
 
 		// CompareAndSwap ensures that if another request updated the EMA while we were calculating, we
 		// throw away our calculation and try again.
+		// Under extreme concurrency, multiple updates will fail and simply drop this sample to prevent
+		// infinite CPU pinning. This dynamic sample filtering is acceptable as the Law of Large Numbers
+		// ensures the moving average remains statistically representative.
 		if state.average.CompareAndSwap(oldBits, newBits) {
 			state.samples.Add(1)
 			break

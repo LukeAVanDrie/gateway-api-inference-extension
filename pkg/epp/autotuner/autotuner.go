@@ -191,7 +191,10 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 
 	newLimits := t.currentLimits
 
-	// --- Controller A: DecodeTokens (AIMD + Kleinrock's Power Deadband) ---
+	// --- Controller A: DecodeTokens (MIMD + Kleinrock's Power Deadband) ---
+	// Note: MIMD with a Deadband is used over PID Control because classical PID suffers from noisy
+	// D-term oscillation with scraping jitter and catastrophic I-term wind-up during heavy prompt
+	// caching misses. MIMD safely bounds instability.
 	currentTPOT := time.Duration(delta.P90TPOT * float64(time.Second))
 
 	if currentTPOT > t.config.TargetTPOT {
@@ -202,7 +205,7 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 			t.inSlowStart = false
 		}
 
-		// Multiplicative Decrease (Standard AIMD penalty)
+		// Multiplicative Decrease (Standard MIMD penalty)
 
 		// --- HBM Cross-Talk Governor ---
 		// If Prefill is clogging the HBM bandwidth, do NOT punish the Decode limits due to high latency.
@@ -236,7 +239,7 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 			newLimits.DecodeTokens = int64(math.Ceil(proportionalLimit))
 			t.lastPower = currentPower // Seed the power metric for a smooth handoff
 		} else {
-			// Phase 2: PI Control / Kleinrock's Power Deadband (Congestion Avoidance)
+			// Phase 2: MI Control / Kleinrock's Power Deadband (Congestion Avoidance)
 			// Proportional Increase / Decrements are still bounded by absolute token step increase, to ensure
 			// stability during rapid convergence phases.
 			if t.lastPower == 0 {
@@ -261,11 +264,12 @@ func (t *PodAutoTuner) EvaluateEpoch(delta *datalayer.EpochDelta, currentUsed hy
 						proportionalLimit = math.Min(proportionalLimit, additiveLimit)
 					}
 					newLimits.DecodeTokens = int64(math.Ceil(proportionalLimit))
+					t.lastPower = currentPower
 				} else if powerDelta < -t.config.DeadbandRatio {
 					// The Knee: We hit the physical memory bandwidth wall. Back off slightly.
 					newLimits.DecodeTokens = int64(math.Floor(float64(t.currentLimits.DecodeTokens) * t.config.BackoffRatio))
+					t.lastPower = currentPower
 				}
-				t.lastPower = currentPower
 			}
 		}
 	}

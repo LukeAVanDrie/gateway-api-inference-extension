@@ -123,6 +123,9 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 	idx := epoch % 3
 	prevIdx := (epoch + 2) % 3 // strictly evaluates current and previous transit windows
 
+	l.admissionMu.Lock()
+	defer l.admissionMu.Unlock()
+
 	hasCapacity := false
 	l.endpointLedgers.Range(func(key, value any) bool {
 		endpoint := value.(*endpointLedger)
@@ -131,13 +134,16 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 
 		availKV := limit.KVBlocks - scraped.KVBlocks
 		availActive := limit.ActiveRequests - scraped.ActiveRequests
+		availPrefill := limit.PrefillTokens - endpoint.endpointTracking.PrefillTokens.Load()
+		availDecode := limit.DecodeTokens - endpoint.endpointTracking.DecodeTokens.Load()
 
 		endpoint.mu.Lock()
 		availKV -= endpoint.transitBuckets[idx].KVBlocks + endpoint.transitBuckets[prevIdx].KVBlocks
 		availActive -= endpoint.transitBuckets[idx].ActiveRequests + endpoint.transitBuckets[prevIdx].ActiveRequests
 		endpoint.mu.Unlock()
 
-		if worstCase.KVBlocks <= availKV && worstCase.ActiveRequests <= availActive {
+		if worstCase.KVBlocks <= availKV && worstCase.ActiveRequests <= availActive &&
+			worstCase.PrefillTokens <= availPrefill && worstCase.DecodeTokens <= availDecode {
 			hasCapacity = true
 			return false // short circuit
 		}
@@ -147,9 +153,6 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 	if !hasCapacity {
 		return nil, ErrGlobalCapacityExceeded
 	}
-
-	l.admissionMu.Lock()
-	defer l.admissionMu.Unlock()
 
 	checkSpatialAll := func(hold, scraped, t1, t2, limit *atomicResourceVector, worst ResourceVector) bool {
 		_hold := hold.load()
