@@ -739,8 +739,8 @@ func TestShardProcessor(t *testing.T) {
 							qLow := h.addQueue(keyLow)
 							require.NoError(t, qLow.Add(h.newTestItem("item-low", keyLow, testTTL)))
 
-							h.ledger.TryAcquireHoldFunc = func(_ hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error) {
-								return nil, hypervisor.ErrGlobalCapacityExceeded
+							h.ledger.TryAcquireHoldFunc = func(_ hypervisor.ResourceVector) (hypervisor.HoldReceipt, error) {
+								return hypervisor.HoldReceipt{}, hypervisor.ErrGlobalCapacityExceeded
 							}
 						},
 						expectDidDispatch: false,
@@ -908,8 +908,7 @@ func TestShardProcessor(t *testing.T) {
 						h := newTestHarness(t, testCleanupTick)
 						tc.setupMocks(h)
 						item := h.newTestItem("req-dispatch-fail", testFlow, testTTL)
-						receipt := &hypervisor.HoldReceipt{}
-						err := h.processor.dispatchItem(item, receipt)
+						err := h.processor.dispatchItem(item, hypervisor.HoldReceipt{})
 						require.Error(t, err, "dispatchItem should return an error")
 						assert.ErrorIs(t, err, tc.expectedErr, "The underlying registry error should be preserved")
 					})
@@ -932,7 +931,7 @@ func TestShardProcessor(t *testing.T) {
 				}
 
 				// --- ACT ---
-				err := h.processor.dispatchItem(item, &hypervisor.HoldReceipt{})
+				err := h.processor.dispatchItem(item, hypervisor.HoldReceipt{})
 
 				// --- ASSERT ---
 				require.NoError(t, err, "dispatchItem should return no error for an already finalized item")
@@ -1173,13 +1172,13 @@ func TestShardProcessor(t *testing.T) {
 }
 
 type mockTokenLedger struct {
-	hypervisor.TokenLedger
-	TryAcquireHoldFunc func(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error)
+	hypervisor.AdmissionLedger
+	TryAcquireHoldFunc func(worstCase hypervisor.ResourceVector) (hypervisor.HoldReceipt, error)
 }
 
-func (m *mockTokenLedger) TryAcquireHold(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error) {
+func (m *mockTokenLedger) TryAcquireHold(ctx context.Context, worstCase hypervisor.ResourceVector) (hypervisor.HoldReceipt, error) {
 	if m.TryAcquireHoldFunc != nil {
 		return m.TryAcquireHoldFunc(worstCase)
 	}
-	return &hypervisor.HoldReceipt{}, nil
+	return hypervisor.HoldReceipt{}, nil
 }

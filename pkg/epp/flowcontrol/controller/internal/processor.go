@@ -67,7 +67,7 @@ var ErrProcessorBusy = errors.New("shard processor is busy")
 // inherently atomic without coarse-grained locks.
 type ShardProcessor struct {
 	shard                contracts.RegistryShard
-	ledger               hypervisor.TokenLedger
+	ledger               hypervisor.AdmissionLedger
 	podLocator           contracts.PodLocator
 	clock                clock.WithTicker
 	cleanupSweepInterval time.Duration
@@ -89,7 +89,7 @@ type ShardProcessor struct {
 func NewShardProcessor(
 	ctx context.Context,
 	shard contracts.RegistryShard,
-	ledger hypervisor.TokenLedger,
+	ledger hypervisor.AdmissionLedger,
 	podLocator contracts.PodLocator,
 	clock clock.WithTicker,
 	cleanupSweepInterval time.Duration,
@@ -332,7 +332,7 @@ func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
 		// --- Viability Check (Proactive Capacity via Ledger) ---
 		req := item.OriginalRequest()
 		head := item.(*FlowItem)
-		holdReceipt, err := sp.ledger.TryAcquireHold(head.worstCaseVector)
+		holdReceipt, err := sp.ledger.TryAcquireHold(context.Background(), head.worstCaseVector)
 		if err != nil {
 			sp.logger.V(logutil.DEBUG).Info("Policy's chosen item fails capacity check; enforcing HoL blocking.",
 				"flowKey", req.FlowKey(), "reqID", req.ID(), "priorityName", originalBand.PriorityName())
@@ -345,7 +345,7 @@ func (sp *ShardProcessor) dispatchCycle(ctx context.Context) bool {
 		if err := sp.dispatchItem(item, holdReceipt); err != nil {
 			sp.logger.Error(err, "Failed to dispatch item, skipping priority band for this cycle",
 				"flowKey", req.FlowKey(), "reqID", req.ID(), "priorityName", originalBand.PriorityName())
-			sp.ledger.ReleaseHold(holdReceipt)
+			sp.ledger.ReleaseHold(context.Background(), holdReceipt)
 			continue // Continue to the next band to maximize work conservation.
 		}
 		return true
@@ -375,7 +375,7 @@ func (sp *ShardProcessor) selectItem(
 }
 
 // dispatchItem handles the final steps of dispatching an item: removing it from the queue and finalizing its outcome.
-func (sp *ShardProcessor) dispatchItem(itemAcc flowcontrol.QueueItemAccessor, receipt *hypervisor.HoldReceipt) error {
+func (sp *ShardProcessor) dispatchItem(itemAcc flowcontrol.QueueItemAccessor, receipt hypervisor.HoldReceipt) error {
 	req := itemAcc.OriginalRequest()
 	key := req.FlowKey()
 	managedQ, err := sp.shard.ManagedQueue(key)
@@ -394,7 +394,7 @@ func (sp *ShardProcessor) dispatchItem(itemAcc flowcontrol.QueueItemAccessor, re
 
 	removedItem := removedItemAcc.(*FlowItem)
 	sp.logger.V(logutil.TRACE).Info("Item dispatched.", "flowKey", req.FlowKey(), "reqID", req.ID())
-	removedItem.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, receipt)
+	removedItem.FinalizeWithOutcome(types.QueueOutcomeDispatched, nil, &receipt)
 	return nil
 }
 

@@ -39,7 +39,6 @@ import (
 	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 	fwkrq "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/requestcontrol"
 	schedulingtypes "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/metrics"
 	errutil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/error"
 	requtil "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/util/request"
@@ -95,8 +94,6 @@ type RequestContext struct {
 
 	SchedulingRequest *schedulingtypes.LLMRequest
 
-	HoldReceipt          *hypervisor.HoldReceipt
-	CommitReceipt        *hypervisor.CommitReceipt
 	RequestState         StreamRequestState
 	modelServerStreaming bool
 

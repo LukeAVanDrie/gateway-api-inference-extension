@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/profile"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/prefix"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 )
 
 // DefaultScorerWeight is the weight used for scorers referenced in the configuration without explicit weights.
@@ -190,6 +191,28 @@ func ensureFlowControlLayer(
 	handle fwkplugin.Handle,
 	allPlugins map[string]fwkplugin.Plugin,
 ) error {
+	if _, ok := allPlugins[hypervisor.LedgerPluginType]; !ok {
+		if err := registerDefaultPlugin(cfg, handle, hypervisor.LedgerPluginType); err != nil {
+			return err
+		}
+	}
+
+	for i, prof := range cfg.SchedulingProfiles {
+		hasLedger := false
+		for _, pluginRef := range prof.Plugins {
+			if pluginRef.PluginRef == hypervisor.LedgerPluginType {
+				hasLedger = true
+				break
+			}
+		}
+		if !hasLedger {
+			cfg.SchedulingProfiles[i].Plugins = append(
+				cfg.SchedulingProfiles[i].Plugins,
+				configapi.SchedulingPlugin{PluginRef: hypervisor.LedgerPluginType},
+			)
+		}
+	}
+
 	if _, ok := allPlugins[registry.DefaultOrderingPolicyRef]; !ok {
 		if err := registerDefaultPlugin(cfg, handle, registry.DefaultOrderingPolicyRef); err != nil {
 			return err

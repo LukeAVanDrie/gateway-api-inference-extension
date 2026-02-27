@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/profile"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/prefix"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector/framework/plugins/utilizationdetector"
 	"sigs.k8s.io/gateway-api-inference-extension/test/utils"
 )
@@ -233,9 +234,8 @@ func TestInstantiateAndConfigure(t *testing.T) {
 
 				// 2. Verify Profile Integrity
 				// We explicitly defined a picker, so the defaulter should NOT have added a second one.
-				require.Len(t, rawCfg.SchedulingProfiles, 1)
-				require.Len(t, rawCfg.SchedulingProfiles[0].Plugins, 2,
-					"Profile should have exactly 2 plugins (Scorer + Explicit Picker)")
+				require.Len(t, rawCfg.SchedulingProfiles[0].Plugins, 3,
+					"Profile should have exactly 3 plugins (Scorer + Explicit Picker + TwoTierLedger)")
 
 				// 3. Verify Weight Propagation
 				// The YAML specified weight: 50. Ensure it wasn't overwritten by defaults.
@@ -251,7 +251,7 @@ func TestInstantiateAndConfigure(t *testing.T) {
 			wantErr:    false,
 			validate: func(t *testing.T, _ fwkplugin.Handle, rawCfg *configapi.EndpointPickerConfig, cfg *config.Config) {
 				require.Len(t, rawCfg.SchedulingProfiles, 1, "Unexpected profile structure")
-				require.Len(t, rawCfg.SchedulingProfiles[0].Plugins, 2, "Expected Scorer + Default Picker")
+				require.Len(t, rawCfg.SchedulingProfiles[0].Plugins, 3, "Expected Scorer + Default Picker + TwoTierLedger")
 				w := rawCfg.SchedulingProfiles[0].Plugins[0].Weight
 				require.NotNil(t, w, "Weight should not be nil")
 				require.Equal(t, 1.0, *w, "Expected default scorer weight of 1.0")
@@ -688,4 +688,7 @@ func registerTestPlugins(t *testing.T) {
 	// Ensure system defaults are registered too.
 	fwkplugin.Register(picker.MaxScorePickerType, picker.MaxScorePickerFactory)
 	fwkplugin.Register(profile.SingleProfileHandlerType, profile.SingleProfileHandlerFactory)
+	fwkplugin.Register(hypervisor.LedgerPluginType, func(name string, _ json.RawMessage, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
+		return &mockPlugin{t: fwkplugin.TypedName{Name: name, Type: hypervisor.LedgerPluginType}}, nil
+	})
 }

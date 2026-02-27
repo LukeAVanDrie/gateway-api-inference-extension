@@ -27,17 +27,6 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/hypervisor"
 )
 
-// TokenEstimator predicts the physical GPU cost of an incoming LLM request.
-type TokenEstimator interface {
-	// Estimate (Hot Path): Called by Flow Control BEFORE admission.
-	// Returns the pessimistic worst-case ResourceVector.
-	Estimate(flow flowcontrol.FlowKey, targetModel, baseModel string, promptTokens, maxNewTokens int64, blockSize int64) hypervisor.ResourceVector
-
-	// Observe (Cold Path): Called by the OnResponseComplete lifecycle hook.
-	// Feeds actual generated token counts back into the EMA learning models.
-	Observe(flow flowcontrol.FlowKey, targetModel, baseModel string, actualGeneratedTokens int64)
-}
-
 // emaState holds the lock-free state for a single entity's history.
 type emaState struct {
 	// average packs a float64 into an atomic.Uint64 using math.Float64bits().
@@ -94,8 +83,8 @@ func NewHierarchicalEstimator(
 // Estimate resolves the hierarchy to predict execution cost in O(1) time.
 func (e *HierarchicalEstimator) Estimate(
 	flow flowcontrol.FlowKey,
-	baseModel string,
 	targetModel string,
+	baseModel string,
 	promptTokens,
 	maxNewTokens int64,
 	blockSize int64,

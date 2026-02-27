@@ -38,7 +38,6 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	logutil "sigs.k8s.io/gateway-api-inference-extension/pkg/common/observability/logging"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/estimator"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/internal"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/types"
@@ -64,7 +63,7 @@ type shardProcessor interface {
 type shardProcessorFactory func(
 	ctx context.Context,
 	shard contracts.RegistryShard,
-	ledger hypervisor.TokenLedger,
+	ledger hypervisor.AdmissionLedger,
 	podLocator contracts.PodLocator,
 	clock clock.WithTicker,
 	cleanupSweepInterval time.Duration,
@@ -100,9 +99,9 @@ type FlowController struct {
 
 	config                *Config
 	registry              registryClient
-	ledger                hypervisor.TokenLedger
+	ledger                hypervisor.AdmissionLedger
 	podLocator            contracts.PodLocator
-	estimator             estimator.TokenEstimator
+	estimator             hypervisor.TokenEstimator
 	clock                 clock.WithTicker
 	logger                logr.Logger
 	shardProcessorFactory shardProcessorFactory
@@ -133,9 +132,9 @@ func NewFlowController(
 	ctx context.Context,
 	config *Config,
 	registry contracts.FlowRegistry,
-	ledger hypervisor.TokenLedger,
+	ledger hypervisor.AdmissionLedger,
 	podLocator contracts.PodLocator,
-	est estimator.TokenEstimator,
+	est hypervisor.TokenEstimator,
 	opts ...flowControllerOption,
 ) (*FlowController, error) {
 	fc := &FlowController{
@@ -152,7 +151,7 @@ func NewFlowController(
 	fc.shardProcessorFactory = func(
 		ctx context.Context,
 		shard contracts.RegistryShard,
-		ledger hypervisor.TokenLedger,
+		ledger hypervisor.AdmissionLedger,
 		podLocator contracts.PodLocator,
 		clock clock.WithTicker,
 		cleanupSweepInterval time.Duration,

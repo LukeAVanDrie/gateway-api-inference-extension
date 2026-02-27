@@ -18,6 +18,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -121,6 +122,7 @@ type Runner struct {
 	requestControlConfig *requestcontrol.Config
 	schedulerConfig      *scheduling.SchedulerConfig
 	customCollectors     []prometheus.Collector
+	ledger               *hypervisor.TwoTierLedger
 
 	testOverrideSkipNameValidation bool
 }
@@ -329,7 +331,10 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 	}
 
 	ledger := &hypervisor.TwoTierLedger{}
-	go ledger.RunMasterTick(ctx)
+	if err := mgr.Add(ledger); err != nil {
+		setupLog.Error(err, "Failed to register ledger runnable")
+		return nil, nil, err
+	}
 
 	bridge := hypervisor.NewTelemetryBridge(ledger)
 
@@ -360,8 +365,6 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to initialize Flow Registry: %w", err)
 		}
-		ledger := &hypervisor.TwoTierLedger{}
-		go ledger.RunMasterTick(ctx)
 		fc, err := fccontroller.NewFlowController(
 			ctx,
 			eppConfig.FlowControlConfig.Controller,
@@ -380,7 +383,7 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		admissionController = requestcontrol.NewLegacyAdmissionController(saturationDetector, locator)
 	}
 
-	director := requestcontrol.NewDirectorWithConfig(ledger, ds, scheduler, admissionController, locator, est, r.requestControlConfig)
+	director := requestcontrol.NewDirectorWithConfig(ds, scheduler, admissionController, locator, est, r.requestControlConfig)
 
 	// --- Setup ExtProc Server Runner ---
 	serverRunner := &runserver.ExtProcServerRunner{
@@ -469,6 +472,9 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory, mo
 
 // registerInTreePlugins registers the factory functions of all known plugins
 func (r *Runner) registerInTreePlugins() {
+	fwkplugin.Register(hypervisor.LedgerPluginType, func(name string, parameters json.RawMessage, handle fwkplugin.Handle) (fwkplugin.Plugin, error) {
+		return r.ledger, nil
+	})
 	fwkplugin.Register(prefix.PrefixCachePluginType, prefix.PrefixCachePluginFactory)
 	fwkplugin.Register(picker.MaxScorePickerType, picker.MaxScorePickerFactory)
 	fwkplugin.Register(picker.RandomPickerType, picker.RandomPickerFactory)
@@ -515,6 +521,18 @@ func (r *Runner) parseConfigurationPhaseOne(ctx context.Context, opts *runserver
 	loader.RegisterFeatureGate(datalayer.ExperimentalDatalayerFeatureGate)
 	loader.RegisterFeatureGate(flowcontrol.FeatureGate)
 	loader.RegisterFeatureGate(datalayer.PrepareDataPluginsFeatureGate)
+
+	est, err := estimator.NewHierarchicalEstimator(
+		1024, // l1CacheSize
+		0.25, // alpha (EMA decay factor)
+		1.1,  // safetyMargin (10% overhead)
+		10,   // minSamples (minimum samples before relying on EMA)
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize Estimator: %w", err)
+	}
+
+	r.ledger = hypervisor.NewTwoTierLedger(est)
 
 	r.registerInTreePlugins()
 
@@ -672,7 +690,7 @@ func (t *TelemetryFacilitator) NewEndpoint(ctx context.Context, meta *fwkdl.Endp
 	ep := t.EndpointFactory.NewEndpoint(ctx, meta, info)
 	if ep != nil {
 		endpointID := ep.GetMetadata().NamespacedName.String()
-		deltaEngine := datalayer.NewPodDeltaEngine(2 * time.Second)
+		deltaEngine := datalayer.NewEndpointDeltaEngine(2 * time.Second)
 
 		tunerConfig := autotuner.DefaultTunerConfig()
 		autoTuner := autotuner.NewPodAutoTuner(endpointID, tunerConfig, t.bridge.Ledger(), tunerConfig.DefaultLimits)

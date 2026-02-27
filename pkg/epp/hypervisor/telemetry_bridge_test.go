@@ -59,7 +59,7 @@ func TestTelemetryBridge(t *testing.T) {
 	ledger := &TwoTierLedger{}
 	bridge := NewTelemetryBridge(ledger)
 
-	deltaEngine := &datalayer.PodDeltaEngine{}
+	deltaEngine := &datalayer.EndpointDeltaEngine{}
 	evaluator := &mockEvaluator{}
 
 	// "/test-ep" is what types.NamespacedName{Name: "test-ep"}.String() returns
@@ -82,7 +82,7 @@ func TestReconcile(t *testing.T) {
 	ledger := &TwoTierLedger{}
 	bridge := NewTelemetryBridge(ledger)
 
-	deltaEngine := &datalayer.PodDeltaEngine{}
+	deltaEngine := &datalayer.EndpointDeltaEngine{}
 	evaluator := &mockEvaluator{}
 
 	bridge.RegisterEndpoint("/test-ep", deltaEngine, evaluator)

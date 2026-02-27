@@ -29,7 +29,7 @@ func TestRAGBombConcurrency(t *testing.T) {
 
 	ledger := &TwoTierLedger{}
 	// Initialize ledger with a global KV block limit of 100,000
-	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 100000, ActiveRequests: 100000}})
+	ledger.UpdateEndpointConfig(context.Background(), "test-endpoint", EndpointConfigPatch{Limits: &ResourceVector{KVBlocks: 100000, ActiveRequests: 100000}})
 
 	var wg sync.WaitGroup
 	successCount := atomic.Int64{}
@@ -42,7 +42,7 @@ func TestRAGBombConcurrency(t *testing.T) {
 	for range numGoroutines {
 		go func() {
 			defer wg.Done()
-			_, err := ledger.TryAcquireHold(worstCase)
+			_, err := ledger.TryAcquireHold(context.Background(), worstCase)
 			switch err {
 			case nil:
 				successCount.Add(1)
@@ -76,10 +76,10 @@ func TestReleaseHold(t *testing.T) {
 	t.Parallel()
 
 	ledger := &TwoTierLedger{}
-	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
+	ledger.UpdateEndpointConfig(context.Background(), "test-endpoint", EndpointConfigPatch{Limits: &ResourceVector{KVBlocks: 1000}})
 
 	// 1. Acquire hold
-	receipt, err := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
+	receipt, err := ledger.TryAcquireHold(context.Background(), ResourceVector{KVBlocks: 100})
 	if err != nil {
 		t.Fatalf("TryAcquireHold failed: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestReleaseHold(t *testing.T) {
 	}
 
 	// 2. Release hold
-	ledger.ReleaseHold(receipt)
+	ledger.ReleaseHold(context.Background(), receipt)
 
 	if ledger.globalHold.KVBlocks.Load() != 0 {
 		t.Errorf("Expected globalHold to be 0 after release, got %d", ledger.globalHold.KVBlocks.Load())
@@ -119,10 +119,10 @@ func TestCommitLedger(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ledger := &TwoTierLedger{}
-			ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
+			ledger.UpdateEndpointConfig(context.Background(), "test-endpoint", EndpointConfigPatch{Limits: &ResourceVector{KVBlocks: 1000}})
 
 			// 1. Acquire hold
-			receipt, err := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
+			receipt, err := ledger.TryAcquireHold(context.Background(), ResourceVector{KVBlocks: 100})
 			if err != nil {
 				t.Fatalf("TryAcquireHold failed: %v", err)
 			}
@@ -133,7 +133,7 @@ func TestCommitLedger(t *testing.T) {
 
 			// 2. Commit
 			actualCost := ResourceVector{KVBlocks: 50}
-			commitReceipt, err := ledger.Commit(tt.endpointID, actualCost, receipt)
+			commitReceipt, err := ledger.Commit(context.Background(), tt.endpointID, actualCost, receipt)
 
 			if err != tt.wantErr {
 				t.Errorf("Commit() error = %v, wantErr %v", err, tt.wantErr)
@@ -165,14 +165,14 @@ func TestReleaseEndpointCapacity(t *testing.T) {
 	t.Parallel()
 
 	ledger := &TwoTierLedger{}
-	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
+	ledger.UpdateEndpointConfig(context.Background(), "test-endpoint", EndpointConfigPatch{Limits: &ResourceVector{KVBlocks: 1000}})
 
 	// Commit receipt is necessary for releasing.
-	receipt, _ := ledger.TryAcquireHold(ResourceVector{KVBlocks: 100})
+	receipt, _ := ledger.TryAcquireHold(context.Background(), ResourceVector{KVBlocks: 100})
 	actualCost := ResourceVector{KVBlocks: 50}
-	commitReceipt, _ := ledger.Commit("test-endpoint", actualCost, receipt)
+	commitReceipt, _ := ledger.Commit(context.Background(), "test-endpoint", actualCost, receipt)
 
-	ledger.ReleaseEndpointCapacity("test-endpoint", commitReceipt)
+	ledger.ReleaseEndpointCapacity(context.Background(), "test-endpoint", commitReceipt)
 
 	// Since locally held is implicitly restored based on Commit/Release logic,
 	// let's run ReconcileEndpointCapacity and assert on that instead.
@@ -182,7 +182,7 @@ func TestReconcileEndpointCapacity(t *testing.T) {
 	t.Parallel()
 
 	ledger := &TwoTierLedger{}
-	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
+	ledger.UpdateEndpointConfig(context.Background(), "test-endpoint", EndpointConfigPatch{Limits: &ResourceVector{KVBlocks: 1000}})
 
 	scrapedUsage := ResourceVector{KVBlocks: 150}
 	ledger.ReconcileEndpointCapacity("test-endpoint", scrapedUsage)
@@ -196,14 +196,14 @@ func TestMasterTick(t *testing.T) {
 	t.Parallel()
 
 	ledger := &TwoTierLedger{}
-	ledger.UpdateEndpointConfig("test-endpoint", EndpointConfig{Limits: &ResourceVector{KVBlocks: 1000}})
+	ledger.UpdateEndpointConfig(context.Background(), "test-endpoint", EndpointConfigPatch{Limits: &ResourceVector{KVBlocks: 1000}})
 
 	// Initial epoch should be 0 or 1
 	startEpoch := ledger.globalEpoch.Load()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	// Run tick in background
-	go ledger.RunMasterTick(ctx)
+	go ledger.Start(ctx)
 
 	// Wait for a few ticks
 	time.Sleep(150 * time.Millisecond)
@@ -220,7 +220,7 @@ func TestLedgerTransitiveRacing(t *testing.T) {
 	l := &TwoTierLedger{}
 
 	// Define standard resource allocations
-	l.UpdateEndpointConfig("ep-1", EndpointConfig{
+	l.UpdateEndpointConfig(context.Background(), "ep-1", EndpointConfigPatch{
 		Limits: &ResourceVector{
 			PrefillTokens:  2000,
 			DecodeTokens:   2000,
@@ -236,7 +236,7 @@ func TestLedgerTransitiveRacing(t *testing.T) {
 	// Run Master Tick
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go l.RunMasterTick(ctx)
+	go l.Start(ctx)
 
 	start := time.Now()
 	for i := 0; i < concurrency; i++ {
@@ -244,21 +244,21 @@ func TestLedgerTransitiveRacing(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for time.Since(start) < runtimeSeconds {
-				receipt, err := l.TryAcquireHold(ResourceVector{KVBlocks: 10, ActiveRequests: 1})
+				receipt, err := l.TryAcquireHold(context.Background(), ResourceVector{KVBlocks: 10, ActiveRequests: 1})
 				if err != nil {
 					continue
 				}
 
-				commit, err := l.Commit("ep-1", ResourceVector{KVBlocks: 10, ActiveRequests: 1}, receipt)
+				commit, err := l.Commit(context.Background(), "ep-1", ResourceVector{KVBlocks: 10, ActiveRequests: 1}, receipt)
 				if err != nil {
-					l.ReleaseHold(receipt)
+					l.ReleaseHold(context.Background(), receipt)
 					continue
 				}
 
 				// Simulate generation execution overhead
 				time.Sleep(1 * time.Millisecond)
 
-				l.ReleaseEndpointCapacity("ep-1", commit)
+				l.ReleaseEndpointCapacity(context.Background(), "ep-1", commit)
 			}
 		}()
 	}

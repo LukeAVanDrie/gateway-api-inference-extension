@@ -17,6 +17,7 @@ limitations under the License.
 package autotuner
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"testing"
@@ -28,11 +29,11 @@ import (
 
 // Mock Ledger for capturing updates
 type mockLedger struct {
-	hypervisor.TwoTierLedger
+	hypervisor.TopologyRegistry
 	currentLimits hypervisor.ResourceVector
 }
 
-func (m *mockLedger) UpdateEndpointConfig(endpointID string, cfg hypervisor.EndpointConfig) {
+func (m *mockLedger) UpdateEndpointConfig(ctx context.Context, endpointID string, cfg hypervisor.EndpointConfigPatch) {
 	if cfg.Limits != nil {
 		m.currentLimits = *cfg.Limits
 	}

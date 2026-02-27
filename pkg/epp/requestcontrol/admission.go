@@ -175,7 +175,9 @@ func (fcac *FlowControlAdmissionController) Admit(
 	}
 
 	outcome, receipt, err := fcac.flowController.EnqueueAndWait(ctx, fcReq)
-	reqCtx.HoldReceipt = receipt
+	if receipt != nil && reqCtx.SchedulingRequest != nil {
+		reqCtx.SchedulingRequest.HoldReceipt = *receipt
+	}
 	logger.V(logutil.DEBUG).Info("Flow control outcome",
 		"requestID", reqCtx.SchedulingRequest.RequestId, "outcome", outcome, "error", err)
 	return translateFlowControlOutcome(outcome, err)

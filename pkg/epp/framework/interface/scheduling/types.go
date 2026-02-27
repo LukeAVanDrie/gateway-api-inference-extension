@@ -40,12 +40,19 @@ type LLMRequest struct {
 	RequestId string
 	// TargetModel is the final target model after traffic split.
 	TargetModel string
+	// BaseModel is the original target model before traffic split.
+	BaseModel string
 	// Data contains the request-body fields that we parse out as user input.
 	Body *LLMRequestBody
 	// Headers is a map of the request headers.
 	Headers map[string]string
 	// Request Objective
 	Objectives RequestObjectives
+
+	// HoldReceipt is the pessimistic reservation of resources (hypervisor).
+	HoldReceipt any
+	// CommitReceipt is the finalized binding of the request (hypervisor).
+	CommitReceipt any
 }
 
 func (r *LLMRequest) String() string {

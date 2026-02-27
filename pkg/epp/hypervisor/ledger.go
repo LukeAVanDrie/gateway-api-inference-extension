@@ -1,5 +1,5 @@
 /*
-Copyright 2025 The Kubernetes Authors.
+Copyright 2026 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,7 +21,19 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/requestcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
+	attrprefix "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/datalayer/attribute/prefix"
 )
+
+const LedgerPluginType = "two-tier-ledger"
 
 // atomicResourceVector simplifies high-concurrency mutation by utilizing memory fences.
 //
@@ -74,21 +86,31 @@ type TwoTierLedger struct {
 
 	globalEpoch atomic.Uint64 // Monotonically increasing temporal epoch (1 tick = 50ms)
 
-	endpointLedgers sync.Map // map[string]*endpointLedger
+	endpointLedgers sync.Map     // map[string]*endpointLedger
+	transitMu       sync.RWMutex // Protects temporal epoch transitions from late-binding racers
 
-	transitMu sync.RWMutex // Protects temporal epoch transitions from late-binding racers
+	estimator TokenEstimator // Injected to close the ML feedback loop on request completion
 }
 
-// RunMasterTick should be launched in a background goroutine on startup.
-// It advances the temporal epoch every 50ms, permanently zeroing the oldest debt.
-func (l *TwoTierLedger) RunMasterTick(ctx context.Context) {
+// NewTwoTierLedger initializes the ledger with its dependencies.
+func NewTwoTierLedger(est TokenEstimator) *TwoTierLedger {
+	return &TwoTierLedger{
+		estimator: est,
+	}
+}
+
+// Start initiates the background temporal epoch engine.
+// It advances the sliding window every 50ms to permanently purge the oldest transit debt, keeping
+// the hypervisor synchronized with the observability scraping engine.
+// Implements manager.Runnable for the Kubernetes controller manager.
+func (l *TwoTierLedger) Start(ctx context.Context) error {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-ticker.C:
 			l.transitMu.Lock()
 			// Monotonically advance the epoch to permanently prevent bucket aliasing.
@@ -116,9 +138,13 @@ func (l *TwoTierLedger) RunMasterTick(ctx context.Context) {
 	}
 }
 
-// TryAcquireHold applies the O(1) global admission check synchronously, and only adds to the
-// un-committed pool upon success.
-func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, error) {
+// --- Admission Control (Fast-Path) ---
+
+// TryAcquireHold applies the O(1) global admission check synchronously.
+// It serves as a fast-path admission lock that prevents Gateway-level thundering herds from
+// oversubscribing the aggregate cluster capacity before the Scheduler can route requests.
+// Returns HoldReceipt by value to prevent heap allocations on the hot path.
+func (l *TwoTierLedger) TryAcquireHold(ctx context.Context, worstCase ResourceVector) (HoldReceipt, error) {
 	epoch := l.globalEpoch.Load()
 	idx := epoch % 3
 	prevIdx := (epoch + 2) % 3 // strictly evaluates current and previous transit windows
@@ -126,6 +152,8 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 	l.admissionMu.Lock()
 	defer l.admissionMu.Unlock()
 
+	// Proactively ensure at least one backend can theoretically fit the request to prevent holding
+	// global capacity for a payload that cannot be scheduled.
 	hasCapacity := false
 	l.endpointLedgers.Range(func(key, value any) bool {
 		endpoint := value.(*endpointLedger)
@@ -151,7 +179,7 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 	})
 
 	if !hasCapacity {
-		return nil, ErrGlobalCapacityExceeded
+		return HoldReceipt{}, ErrGlobalCapacityExceeded
 	}
 
 	checkSpatialAll := func(hold, scraped, t1, t2, limit *atomicResourceVector, worst ResourceVector) bool {
@@ -183,7 +211,7 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 		&l.globalHold, &l.globalTracking,
 		&l.globalLimit, worstCase,
 	) {
-		return nil, ErrGlobalCapacityExceeded
+		return HoldReceipt{}, ErrGlobalCapacityExceeded
 	}
 
 	// Apply aggregation holds unconditionally upon success.
@@ -192,26 +220,22 @@ func (l *TwoTierLedger) TryAcquireHold(worstCase ResourceVector) (*HoldReceipt, 
 	l.globalHold.KVBlocks.Add(worstCase.KVBlocks)
 	l.globalHold.ActiveRequests.Add(worstCase.ActiveRequests)
 
-	return &HoldReceipt{Held: worstCase}, nil
+	return HoldReceipt{Held: worstCase}, nil
 }
 
-// ReleaseHold releases projections safely back into the ephemeral pool.
-func (l *TwoTierLedger) ReleaseHold(receipt *HoldReceipt) {
-	if receipt == nil {
-		return
-	}
+// ReleaseHold refunds un-committed resources safely back into the ephemeral pool.
+func (l *TwoTierLedger) ReleaseHold(ctx context.Context, receipt HoldReceipt) {
 	l.globalHold.PrefillTokens.Add(-receipt.Held.PrefillTokens)
 	l.globalHold.DecodeTokens.Add(-receipt.Held.DecodeTokens)
 	l.globalHold.KVBlocks.Add(-receipt.Held.KVBlocks)
 	l.globalHold.ActiveRequests.Add(-receipt.Held.ActiveRequests)
 }
 
-// Commit elevates a global HoldReceipt into an accurate CommitReceipt inside of the local endpoint
-// execution tracking, officially shifting capacity from the ephemeral pool into the dynamic
-// temporal net-transit bucket slice.
+// Commit elevates a global HoldReceipt into an accurate CommitReceipt inside the localized tracking,
+// officially shifting capacity from the ephemeral pool into the dynamic temporal net-transit slice.
 // Returns a CommitReceipt tying this workload to the exact temporal epoch of admission.
-func (l *TwoTierLedger) Commit(endpointID string, actualCost ResourceVector, receipt *HoldReceipt) (*CommitReceipt, error) {
-	defer l.ReleaseHold(receipt)
+func (l *TwoTierLedger) Commit(ctx context.Context, endpointID string, actualCost ResourceVector, receipt HoldReceipt) (*CommitReceipt, error) {
+	defer l.ReleaseHold(ctx, receipt)
 
 	value, ok := l.endpointLedgers.Load(endpointID)
 	if !ok {
@@ -244,25 +268,54 @@ func (l *TwoTierLedger) Commit(endpointID string, actualCost ResourceVector, rec
 	}, nil
 }
 
-// ReleaseEndpointCapacity applies the exact "Net-Transit" math.
-//   - Spatial state (KVBlocks, ActiveReqs) dynamically reconciles.
-//   - Throughput state (PrefillTokens, DecodeTokens) is unconditionally refunded without transit
-//     interval windowing.
-func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *CommitReceipt) {
+// ReleasePrefillCapacity securely and idempotently deducts PrefillTokens (Compute FLOPs).
+// It should be called the exact moment Time-To-First-Token (TTFT) is achieved.
+func (l *TwoTierLedger) ReleasePrefillCapacity(ctx context.Context, endpointID string, receipt *CommitReceipt) {
+	if receipt == nil || !receipt.PrefillReleased.CompareAndSwap(false, true) {
+		return // Idempotency check: Already released (prevents double-subtraction)
+	}
+
 	value, ok := l.endpointLedgers.Load(endpointID)
 	if !ok {
 		return
 	}
 	endpoint := value.(*endpointLedger)
 
+	// Deduct the compute rate only.
+	endpoint.endpointTracking.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
+	l.globalTracking.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
+}
+
+// ReleaseEndpointCapacity applies exact "net-transit" math to scale back Spatial metrics (KVBlocks,
+// ActiveReqs) and unconditionally refunds the Bandwidth rate (DecodeTokens).
+func (l *TwoTierLedger) ReleaseEndpointCapacity(ctx context.Context, endpointID string, receipt *CommitReceipt) {
+	if receipt == nil {
+		return
+	}
+
+	// Idempotent fallback: If streaming was disabled and ResponseReceived (TTFT) never fired, release
+	// the Prefill tokens now to prevent a permanent FLOP capacity leak.
+	if receipt.PrefillReleased.CompareAndSwap(false, true) {
+		value, ok := l.endpointLedgers.Load(endpointID)
+		if ok {
+			endpoint := value.(*endpointLedger)
+			endpoint.endpointTracking.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
+			l.globalTracking.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
+		}
+	}
+
+	value, ok := l.endpointLedgers.Load(endpointID)
+	if !ok {
+		return
+	}
+	endpoint := value.(*endpointLedger)
 	idx := receipt.Epoch % 3
 
-	endpoint.endpointTracking.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
+	// Unconditionally release Bandwidth (DecodeTokens).
 	endpoint.endpointTracking.DecodeTokens.Add(-receipt.ActualCost.DecodeTokens)
-	l.globalTracking.PrefillTokens.Add(-receipt.ActualCost.PrefillTokens)
 	l.globalTracking.DecodeTokens.Add(-receipt.ActualCost.DecodeTokens)
 
-	// Temporal window reconciliation
+	// Temporal window reconciliation for Spatial Occupancy (KVBlocks, ActiveRequests)
 	l.transitMu.RLock()
 	endpoint.mu.Lock()
 	currentEpoch := l.globalEpoch.Load()
@@ -275,8 +328,8 @@ func (l *TwoTierLedger) ReleaseEndpointCapacity(endpointID string, receipt *Comm
 
 	if shouldSubtract {
 		// Subtract from standard vectors using CAS to prevent negative Temporary Allocations.
-		// Since subtraction logic might run an instant after Master Tick has zeroed that bucket,
-		// the floor safeguards the vector from rolling negative values.
+		// Since subtraction logic might run an instant after Master Tick has zeroed that bucket, the
+		// floor safeguards the vector from rolling negative values.
 		subAtomicNoNegative(&l.globalTransit[idx].KVBlocks, receipt.ActualCost.KVBlocks)
 		subAtomicNoNegative(&l.globalTransit[idx].ActiveRequests, receipt.ActualCost.ActiveRequests)
 	}
@@ -293,8 +346,10 @@ func subAtomicNoNegative(val *atomic.Int64, delta int64) {
 	}
 }
 
+// --- Topology & Telemetry Control Plane ---
+
 // UpdateEndpointConfig modifies high benchmarks to scale topology dimensions.
-func (l *TwoTierLedger) UpdateEndpointConfig(endpointID string, cfg EndpointConfig) {
+func (l *TwoTierLedger) UpdateEndpointConfig(ctx context.Context, endpointID string, patch EndpointConfigPatch) {
 	value, ok := l.endpointLedgers.Load(endpointID)
 	if !ok {
 		value, _ = l.endpointLedgers.LoadOrStore(endpointID, &endpointLedger{})
@@ -304,26 +359,26 @@ func (l *TwoTierLedger) UpdateEndpointConfig(endpointID string, cfg EndpointConf
 	endpoint.mu.Lock()
 	defer endpoint.mu.Unlock()
 
-	if cfg.Limits != nil {
-		oldPrefill := endpoint.limit.PrefillTokens.Swap(cfg.Limits.PrefillTokens)
-		oldDecode := endpoint.limit.DecodeTokens.Swap(cfg.Limits.DecodeTokens)
-		oldKV := endpoint.limit.KVBlocks.Swap(cfg.Limits.KVBlocks)
-		oldActive := endpoint.limit.ActiveRequests.Swap(cfg.Limits.ActiveRequests)
+	if patch.Limits != nil {
+		oldPrefill := endpoint.limit.PrefillTokens.Swap(patch.Limits.PrefillTokens)
+		oldDecode := endpoint.limit.DecodeTokens.Swap(patch.Limits.DecodeTokens)
+		oldKV := endpoint.limit.KVBlocks.Swap(patch.Limits.KVBlocks)
+		oldActive := endpoint.limit.ActiveRequests.Swap(patch.Limits.ActiveRequests)
 
-		l.globalLimit.PrefillTokens.Add(cfg.Limits.PrefillTokens - oldPrefill)
-		l.globalLimit.DecodeTokens.Add(cfg.Limits.DecodeTokens - oldDecode)
-		l.globalLimit.KVBlocks.Add(cfg.Limits.KVBlocks - oldKV)
-		l.globalLimit.ActiveRequests.Add(cfg.Limits.ActiveRequests - oldActive)
+		l.globalLimit.PrefillTokens.Add(patch.Limits.PrefillTokens - oldPrefill)
+		l.globalLimit.DecodeTokens.Add(patch.Limits.DecodeTokens - oldDecode)
+		l.globalLimit.KVBlocks.Add(patch.Limits.KVBlocks - oldKV)
+		l.globalLimit.ActiveRequests.Add(patch.Limits.ActiveRequests - oldActive)
 	}
 
-	if cfg.TotalKVBlocks != nil {
-		oldKV := endpoint.limit.KVBlocks.Swap(*cfg.TotalKVBlocks)
-		l.globalLimit.KVBlocks.Add(*cfg.TotalKVBlocks - oldKV)
+	if patch.TotalKVBlocks != nil {
+		oldKV := endpoint.limit.KVBlocks.Swap(*patch.TotalKVBlocks)
+		l.globalLimit.KVBlocks.Add(*patch.TotalKVBlocks - oldKV)
 	}
 
-	if cfg.MaxActiveRequests != nil {
-		oldActive := endpoint.limit.ActiveRequests.Swap(*cfg.MaxActiveRequests)
-		l.globalLimit.ActiveRequests.Add(*cfg.MaxActiveRequests - oldActive)
+	if patch.MaxActiveRequests != nil {
+		oldActive := endpoint.limit.ActiveRequests.Swap(*patch.MaxActiveRequests)
+		l.globalLimit.ActiveRequests.Add(*patch.MaxActiveRequests - oldActive)
 	}
 }
 
@@ -347,7 +402,7 @@ func (l *TwoTierLedger) ReconcileEndpointCapacity(endpointID string, scrapedUsag
 // RemoveEndpoint safely unregisters a pod from the hypervisor.
 // It subtracts the endpoint's configured limits, active baselines, and ephemeral transit debt
 // from the global aggregate vectors to prevent Flow Control from hallucinating ghost capacity.
-func (l *TwoTierLedger) RemoveEndpoint(endpointID string) {
+func (l *TwoTierLedger) RemoveEndpoint(ctx context.Context, endpointID string) {
 	value, loaded := l.endpointLedgers.LoadAndDelete(endpointID)
 	if !loaded {
 		return
@@ -377,11 +432,11 @@ func (l *TwoTierLedger) RemoveEndpoint(endpointID string) {
 	endpoint.mu.Unlock()
 }
 
-func (l *TwoTierLedger) GetGlobalHold() ResourceVector {
+func (l *TwoTierLedger) GetGlobalHold(_ context.Context) ResourceVector {
 	return l.globalHold.load()
 }
 
-func (l *TwoTierLedger) GetEndpointSnapshot(endpointID string) (limits, committed, scraped ResourceVector, ok bool) {
+func (l *TwoTierLedger) GetEndpointSnapshot(_ context.Context, endpointID string) (limits, committed, scraped ResourceVector, ok bool) {
 	value, exists := l.endpointLedgers.Load(endpointID)
 	if !exists {
 		return ResourceVector{}, ResourceVector{}, ResourceVector{}, false
@@ -406,4 +461,121 @@ func (l *TwoTierLedger) GetEndpointSnapshot(endpointID string) (limits, committe
 	committed.DecodeTokens = endpoint.endpointTracking.DecodeTokens.Load()
 
 	return limits, committed, scraped, true
+}
+
+// --- Gateway API Extension Plugins ---
+
+var (
+	_ manager.Runnable                = (*TwoTierLedger)(nil)
+	_ scheduling.Filter               = (*TwoTierLedger)(nil)
+	_ requestcontrol.PreRequest       = (*TwoTierLedger)(nil)
+	_ requestcontrol.ResponseReceived = (*TwoTierLedger)(nil)
+	_ requestcontrol.ResponseComplete = (*TwoTierLedger)(nil)
+)
+
+func (l *TwoTierLedger) TypedName() plugin.TypedName {
+	return plugin.TypedName{
+		Type: LedgerPluginType,
+		Name: LedgerPluginType,
+	}
+}
+
+// Filter prevents the Scheduler from routing to a pod that lacks physical capacity for the Hold.
+func (l *TwoTierLedger) Filter(ctx context.Context, cycleState *scheduling.CycleState, request *scheduling.LLMRequest, pods []scheduling.Endpoint) []scheduling.Endpoint {
+	logger := log.FromContext(ctx)
+
+	worstCase := request.HoldReceipt.(HoldReceipt).Held
+
+	var filtered []scheduling.Endpoint
+	for _, pod := range pods {
+		endpointID := pod.GetMetadata().NamespacedName.String()
+
+		if value, ok := l.endpointLedgers.Load(endpointID); ok {
+			endpoint := value.(*endpointLedger)
+			limits := endpoint.limit.load()
+			scraped := endpoint.scrapedBaseline.load()
+
+			availKV := limits.KVBlocks - scraped.KVBlocks
+			availActive := limits.ActiveRequests - scraped.ActiveRequests
+
+			// Subtract inflight transit debt.
+			epoch := l.globalEpoch.Load()
+			idx := epoch % 3
+			prevIdx := (epoch + 2) % 3
+
+			endpoint.mu.Lock()
+			availKV -= endpoint.transitBuckets[idx].KVBlocks + endpoint.transitBuckets[prevIdx].KVBlocks
+			availActive -= endpoint.transitBuckets[idx].ActiveRequests + endpoint.transitBuckets[prevIdx].ActiveRequests
+			endpoint.mu.Unlock()
+
+			if worstCase.KVBlocks <= availKV && worstCase.ActiveRequests <= availActive {
+				filtered = append(filtered, pod)
+			}
+		}
+	}
+
+	// Fail-Open to prevent strict shedding during TOCTOU concurrency races.
+	// If the resulting slice is empty, a race stole the last drop of perfect capacity globally.
+	// We return the unfiltered list, allowing Scorers to pick the best overloaded pod, treating the
+	// the endpoint's local queue as a micro-burst shock absorber.
+	if len(filtered) == 0 {
+		logger.V(1).Info("TOCTOU race detected: candidate pods exhausted spatial capacity. Failing open to prevent shedding.")
+		return pods
+	}
+
+	return filtered
+}
+
+// PreRequest locks the global hold to the specific backend chosen by the Scheduler.
+func (l *TwoTierLedger) PreRequest(ctx context.Context, request *scheduling.LLMRequest, schedulingResult *scheduling.SchedulingResult) {
+	primaryProfile := schedulingResult.ProfileResults[schedulingResult.PrimaryProfileName]
+	if primaryProfile == nil || len(primaryProfile.TargetEndpoints) == 0 {
+		return
+	}
+
+	targetEndpoint := primaryProfile.TargetEndpoints[0]
+	endpointID := targetEndpoint.GetMetadata().NamespacedName.String()
+
+	actualCost := request.HoldReceipt.(HoldReceipt).Held
+	if matchInfoRaw, ok := targetEndpoint.Get(attrprefix.PrefixCacheMatchInfoKey); ok {
+		if matchInfo, ok := matchInfoRaw.(*attrprefix.PrefixCacheMatchInfo); ok {
+			totalBlocks := matchInfo.TotalBlocks()
+			if totalBlocks > 0 {
+				score := float64(matchInfo.MatchBlocks()) / float64(totalBlocks)
+				log.FromContext(ctx).Info("Applying prefix cache match discount to actualCost", "score", score)
+				actualCost.KVBlocks = int64(float64(actualCost.KVBlocks) * (1.0 - score))
+			}
+		}
+	}
+
+	commitReceipt, err := l.Commit(ctx, endpointID, actualCost, request.HoldReceipt.(HoldReceipt))
+	if err != nil {
+		log.FromContext(ctx).Error(err, "Failed to commit resources to ledger")
+		return
+	}
+	request.CommitReceipt = commitReceipt
+}
+
+// ResponseReceived fires when the HTTP headers arrive (Time-To-First-Token).
+// We release the Prefill FLOPs immediately so the backend can admit the next prompt.
+func (l *TwoTierLedger) ResponseReceived(ctx context.Context, request *scheduling.LLMRequest, response *requestcontrol.Response, targetEndpoint *datalayer.EndpointMetadata) {
+	if request.CommitReceipt != nil {
+		endpointID := targetEndpoint.NamespacedName.String()
+		_commitReceipt := request.CommitReceipt.(*CommitReceipt)
+		l.ReleasePrefillCapacity(ctx, endpointID, _commitReceipt)
+	}
+}
+
+// ResponseComplete fires when the request entirely finishes.
+func (l *TwoTierLedger) ResponseComplete(ctx context.Context, request *scheduling.LLMRequest, response *requestcontrol.Response, targetEndpoint *datalayer.EndpointMetadata) {
+	if request.CommitReceipt != nil {
+		endpointID := targetEndpoint.NamespacedName.String()
+		_commitReceipt := request.CommitReceipt.(*CommitReceipt)
+		l.ReleaseEndpointCapacity(ctx, endpointID, _commitReceipt)
+	}
+
+	if response.Usage.CompletionTokens > 0 {
+		flowKey := flowcontrol.FlowKey{Priority: request.Objectives.Priority}
+		l.estimator.Observe(flowKey, request.TargetModel, request.BaseModel, int64(response.Usage.CompletionTokens))
+	}
 }

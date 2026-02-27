@@ -39,7 +39,7 @@ type EpochEvaluator interface {
 }
 
 type endpointState struct {
-	deltaEngine *datalayer.PodDeltaEngine
+	deltaEngine *datalayer.EndpointDeltaEngine
 	autoTuner   EpochEvaluator
 	endpointID  string
 }
@@ -55,16 +55,22 @@ const (
 	AttrMaxNumSeqs         = "max_num_seqs"
 )
 
+// BridgeLedger combines the requisite interfaces from the TokenLedger used by the telemetry loops.
+type BridgeLedger interface {
+	TopologyRegistry
+	TelemetryObserver
+}
+
 // TelemetryBridge maintains a periodic reconciler state for extracting Prometheus metrics,
 // translating them into vectors, and feeding the ledger and autonomic engines.
 type TelemetryBridge struct {
-	ledger TokenLedger
+	ledger BridgeLedger
 
 	mu        sync.RWMutex
 	endpoints map[string]*endpointState
 }
 
-func (t *TelemetryBridge) Ledger() TokenLedger {
+func (t *TelemetryBridge) Ledger() BridgeLedger {
 	return t.ledger
 }
 
@@ -82,7 +88,7 @@ func (t *TelemetryBridge) ExpectedInputType() reflect.Type {
 var _ fwkdl.Extractor = (*TelemetryBridge)(nil)
 
 // NewTelemetryBridge returns a fresh bridge attached to the hypervisor ledger.
-func NewTelemetryBridge(ledger TokenLedger) *TelemetryBridge {
+func NewTelemetryBridge(ledger BridgeLedger) *TelemetryBridge {
 	return &TelemetryBridge{
 		ledger:    ledger,
 		endpoints: make(map[string]*endpointState),
@@ -90,7 +96,7 @@ func NewTelemetryBridge(ledger TokenLedger) *TelemetryBridge {
 }
 
 // RegisterEndpoint sets up a newly discovered endpoint in the state machine.
-func (t *TelemetryBridge) RegisterEndpoint(endpointID string, deltaEngine *datalayer.PodDeltaEngine, tuner EpochEvaluator) {
+func (t *TelemetryBridge) RegisterEndpoint(endpointID string, deltaEngine *datalayer.EndpointDeltaEngine, tuner EpochEvaluator) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -107,7 +113,7 @@ func (t *TelemetryBridge) DeregisterEndpoint(endpointID string) {
 	defer t.mu.Unlock()
 
 	delete(t.endpoints, endpointID)
-	t.ledger.RemoveEndpoint(endpointID)
+	t.ledger.RemoveEndpoint(context.Background(), endpointID)
 }
 
 func getFloatValue(attributes fwkdl.AttributeMap, key string) float64 {
@@ -179,7 +185,7 @@ func (t *TelemetryBridge) Extract(ctx context.Context, data any, ep fwkdl.Endpoi
 	totalKVBlocks := state.autoTuner.GetKVBlocks()
 	maxActiveRequests := getFloatValue(attr, AttrMaxNumSeqs)
 
-	cfg := EndpointConfig{}
+	cfg := EndpointConfigPatch{}
 	if epMetrics := ep.GetMetrics(); epMetrics != nil {
 		cacheUsagePer = epMetrics.KVCacheUsagePercent
 		running = float64(epMetrics.RunningRequestsSize)
@@ -200,7 +206,7 @@ func (t *TelemetryBridge) Extract(ctx context.Context, data any, ep fwkdl.Endpoi
 	}
 
 	if cfg.TotalKVBlocks != nil || cfg.MaxActiveRequests != nil {
-		t.ledger.UpdateEndpointConfig(state.endpointID, cfg)
+		t.ledger.UpdateEndpointConfig(ctx, state.endpointID, cfg)
 	}
 
 	// Calculate the instantaneous ResourceVector.
@@ -223,7 +229,7 @@ func (t *TelemetryBridge) Extract(ctx context.Context, data any, ep fwkdl.Endpoi
 	}
 
 	// Dynamic Metric Snapshotting
-	limits, committed, scraped, ok := t.ledger.GetEndpointSnapshot(endpointID)
+	limits, committed, scraped, ok := t.ledger.GetEndpointSnapshot(ctx, endpointID)
 	if ok {
 		metrics.SetHypervisorLimitKVBlocks(endpointID, float64(limits.KVBlocks))
 		metrics.SetHypervisorLimitActiveRequests(endpointID, float64(limits.ActiveRequests))
@@ -251,7 +257,7 @@ func (t *TelemetryBridge) Extract(ctx context.Context, data any, ep fwkdl.Endpoi
 		}
 
 		// Push global holds
-		globalHolds := t.ledger.GetGlobalHold()
+		globalHolds := t.ledger.GetGlobalHold(ctx)
 		metrics.SetHypervisorHoldKVBlocks("global", float64(globalHolds.KVBlocks))
 		metrics.SetHypervisorHoldActiveRequests("global", float64(globalHolds.ActiveRequests))
 		metrics.SetHypervisorHoldPrefillTokens("global", float64(globalHolds.PrefillTokens))

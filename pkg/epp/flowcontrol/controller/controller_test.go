@@ -37,7 +37,6 @@ import (
 	"k8s.io/utils/clock"
 	testclock "k8s.io/utils/clock/testing"
 
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/estimator"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts/mocks"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/internal"
@@ -278,7 +277,7 @@ type mockShardProcessorFactory struct {
 func (f *mockShardProcessorFactory) new(
 	_ context.Context, // The factory does not use the lifecycle context; it's passed to the processor's Run method later.
 	shard contracts.RegistryShard,
-	_ hypervisor.TokenLedger,
+	_ hypervisor.AdmissionLedger,
 	_ contracts.PodLocator,
 	_ clock.WithTicker,
 	_ time.Duration,
@@ -1142,7 +1141,7 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 		h.fc.shardProcessorFactory = func(
 			ctx context.Context, // The context created by getOrStartWorker for the potential new processor.
 			shard contracts.RegistryShard,
-			_ hypervisor.TokenLedger,
+			_ hypervisor.AdmissionLedger,
 			_ contracts.PodLocator,
 			_ clock.WithTicker,
 			_ time.Duration,
@@ -1441,7 +1440,7 @@ func TestFlowController_Concurrency_Backpressure(t *testing.T) {
 }
 
 type mockTokenEstimator struct {
-	estimator.TokenEstimator
+	hypervisor.TokenEstimator
 }
 
 func (m *mockTokenEstimator) Estimate(flow flowcontrol.FlowKey, targetModel, baseModel string, promptTokens, maxNewTokens int64, blockSize int64) hypervisor.ResourceVector {
@@ -1449,13 +1448,13 @@ func (m *mockTokenEstimator) Estimate(flow flowcontrol.FlowKey, targetModel, bas
 }
 
 type mockTokenLedger struct {
-	hypervisor.TokenLedger
-	TryAcquireHoldFunc func(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error)
+	hypervisor.AdmissionLedger
+	TryAcquireHoldFunc func(worstCase hypervisor.ResourceVector) (hypervisor.HoldReceipt, error)
 }
 
-func (m *mockTokenLedger) TryAcquireHold(worstCase hypervisor.ResourceVector) (*hypervisor.HoldReceipt, error) {
+func (m *mockTokenLedger) TryAcquireHold(ctx context.Context, worstCase hypervisor.ResourceVector) (hypervisor.HoldReceipt, error) {
 	if m.TryAcquireHoldFunc != nil {
 		return m.TryAcquireHoldFunc(worstCase)
 	}
-	return &hypervisor.HoldReceipt{}, nil
+	return hypervisor.HoldReceipt{}, nil
 }

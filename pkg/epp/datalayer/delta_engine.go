@@ -18,17 +18,21 @@ package datalayer
 
 import (
 	"math"
+	"slices"
 	"sync"
 	"time"
 )
 
-// Bucket represents a single cumulative histogram bucket.
+// Bucket represents a single cumulative histogram bucket returned by the inference engine.
+// It reflects total observable resource latency within bounded windows.
 type Bucket struct {
 	UpperBound float64 // The 'le' (less-than-or-equal) boundary. +Inf is math.Inf(1)
 	Count      uint64  // Cumulative count of observations <= UpperBound
 }
 
-// HistogramSnapshot represents a raw cumulative scrape from the vLLM /metrics endpoint.
+// HistogramSnapshot represents a raw cumulative scrape from the inference engine's metrics endpoint.
+// Buckets MUST be ordered by UpperBound in strictly ascending order for the interpolation in
+// CalculateQuantile to yield mathematically valid latencies.
 type HistogramSnapshot struct {
 	Buckets []Bucket // MUST be ordered by UpperBound ascending
 	Count   uint64   // Total observations
@@ -36,8 +40,9 @@ type HistogramSnapshot struct {
 }
 
 // EpochSnapshot holds the raw cumulative counters at a specific point in time.
+// It acts as the immutable baseline from which the relative metric deltas are derived.
 type EpochSnapshot struct {
-	Timestamp             time.Time // Upgraded to native Go time
+	Timestamp             time.Time // Timestamp of the scrape
 	TPOTHistogram         HistogramSnapshot
 	TTFTHistogram         HistogramSnapshot
 	PrefillHistogram      HistogramSnapshot
@@ -45,7 +50,10 @@ type EpochSnapshot struct {
 	RequestSuccessTotal   uint64
 }
 
-// EpochDelta is the cleanly computed "shopping list" handed directly to the Phase 4 Auto-Tuner.
+// EpochDelta is the derived metric dataset passed down to the Auto-Tuner.
+// It synthesizes throughput rates and latency measurements over a strictly timed interval window,
+// effectively isolating execution bursts from steady-state inference.
+// Note: Latency metrics may be math.NaN() if no traffic occurred during the duration.
 type EpochDelta struct {
 	P90TPOT             float64
 	P50TTFT             float64
@@ -55,39 +63,56 @@ type EpochDelta struct {
 	Duration            time.Duration
 }
 
-// PodDeltaEngine maintains the temporal boundaries and calculates exact epoch math for a single endpoint.
-type PodDeltaEngine struct {
+// EndpointDeltaEngine maintains temporal boundaries and calculates epoch deltas for a single endpoint.
+// It absorbs cumulative scraping jitter by advancing the execution window only once enough time has
+// elapsed, converting raw cumulative metrics into rate deltas.
+type EndpointDeltaEngine struct {
 	mu          sync.Mutex
 	lastEpoch   EpochSnapshot
-	epochWindow time.Duration // Configurable target (e.g., 2 * time.Second)
+	epochWindow time.Duration
 }
 
-// NewPodDeltaEngine initializes the time-series bridge for a newly discovered pod.
-func NewPodDeltaEngine(epochWindow time.Duration) *PodDeltaEngine {
-	return &PodDeltaEngine{
+// NewEndpointDeltaEngine initializes the time-series bridge for a newly discovered endpoint.
+// epochWindow defines the observation period (e.g., 2 seconds) used to decouple the metrics
+// analysis frequency from the raw Extractor plugin tick frequency, making control-theory
+// calculations resilient to metrics collection jitter.
+func NewEndpointDeltaEngine(epochWindow time.Duration) *EndpointDeltaEngine {
+	return &EndpointDeltaEngine{
 		epochWindow: epochWindow,
 	}
 }
 
-// UpdateScrape is called every 500ms by the Extractor plugin.
-func (e *PodDeltaEngine) UpdateScrape(scrape EpochSnapshot) *EpochDelta {
+// UpdateScrape is called on each Extractor plugin tick (e.g., every 50ms).
+// It determines if a complete tumbling window has elapsed. If so, it computes the performance
+// delta between the last epoch and this one, returning an EpochDelta.
+func (e *EndpointDeltaEngine) UpdateScrape(scrape EpochSnapshot) *EpochDelta {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Handle absolute initialization
+	// Handle absolute initialization.
 	if e.lastEpoch.Timestamp.IsZero() {
 		e.lastEpoch = scrape
 		return nil
 	}
 
-	// 1. Defend against Prometheus Counter Resets (Pod Restarts)
-	// If any cumulative counter goes backward, the backend rebooted.
-	// We ignore strict transition TO zero, as that may indicate a scrape omission/error.
-	isReset := (scrape.GenerationTokensTotal < e.lastEpoch.GenerationTokensTotal && scrape.GenerationTokensTotal > 0) ||
-		(scrape.RequestSuccessTotal < e.lastEpoch.RequestSuccessTotal && scrape.RequestSuccessTotal > 0) ||
-		(scrape.TPOTHistogram.Count < e.lastEpoch.TPOTHistogram.Count && scrape.TPOTHistogram.Count > 0) ||
-		(scrape.TTFTHistogram.Count < e.lastEpoch.TTFTHistogram.Count && scrape.TTFTHistogram.Count > 0) ||
-		(scrape.PrefillHistogram.Count < e.lastEpoch.PrefillHistogram.Count && scrape.PrefillHistogram.Count > 0)
+	// Defend against counter resets (endpoint restarts) and metrics omissions.
+	// We ignore strict transitions TO zero, as that usually indicates a scrape omission/error.
+	isZeroTransition := (scrape.GenerationTokensTotal == 0 && e.lastEpoch.GenerationTokensTotal > 0) ||
+		(scrape.RequestSuccessTotal == 0 && e.lastEpoch.RequestSuccessTotal > 0) ||
+		(scrape.TPOTHistogram.Count == 0 && e.lastEpoch.TPOTHistogram.Count > 0) ||
+		(scrape.TTFTHistogram.Count == 0 && e.lastEpoch.TTFTHistogram.Count > 0) ||
+		(scrape.PrefillHistogram.Count == 0 && e.lastEpoch.PrefillHistogram.Count > 0)
+
+	if isZeroTransition {
+		return nil // Ignore omission/error, do not update baseline.
+	}
+
+	// If any cumulative counter goes backward without hitting absolute zero, the backend likely rebooted.
+	isReset := (scrape.GenerationTokensTotal < e.lastEpoch.GenerationTokensTotal) ||
+		(scrape.RequestSuccessTotal < e.lastEpoch.RequestSuccessTotal) ||
+		(scrape.TPOTHistogram.Count < e.lastEpoch.TPOTHistogram.Count) ||
+		(scrape.TTFTHistogram.Count < e.lastEpoch.TTFTHistogram.Count) ||
+		(scrape.PrefillHistogram.Count < e.lastEpoch.PrefillHistogram.Count)
 
 	if isReset {
 		// Reset our baseline and wait for the next tumbling window.
@@ -102,7 +127,8 @@ func (e *PodDeltaEngine) UpdateScrape(scrape EpochSnapshot) *EpochDelta {
 		return nil
 	}
 
-	// 2. Calculate the actual physical math over the delta
+	// Calculate latency percentiles matching our tuning goals: P50 for queue dynamics, and P90 for
+	// standard user SLA tracking (tail latency).
 	delta := &EpochDelta{
 		P90TPOT:             CalculateQuantile(0.90, e.lastEpoch.TPOTHistogram, scrape.TPOTHistogram),
 		P50TTFT:             CalculateQuantile(0.50, e.lastEpoch.TTFTHistogram, scrape.TTFTHistogram),
@@ -111,67 +137,106 @@ func (e *PodDeltaEngine) UpdateScrape(scrape EpochSnapshot) *EpochDelta {
 		Duration:            elapsed,
 	}
 
-	// 3. Calculate Token Throughput (Tokens per Second)
-	// Using elapsed.Seconds() natively handles floating point conversion and jitter.
+	// Calculate token throughput (tokens per second).
+	// Using elapsed.Seconds() natively handles floating-point conversion and jitter.
 	deltaTokens := scrape.GenerationTokensTotal - e.lastEpoch.GenerationTokensTotal
 	delta.ThroughputTokensSec = float64(deltaTokens) / elapsed.Seconds()
 
-	// 4. Tumble the window strictly forward
+	// Advance the window. This discards the previous baseline and establishes the current cumulative
+	// scrape as the baseline for the next non-overlapping window.
 	e.lastEpoch = scrape
 
 	return delta
 }
 
 // CalculateQuantile computes a generic percentile (e.g., 0.90 for P90) over a delta histogram.
+// It linearly interpolates latencies across sparse cumulative datasets. If there is no data or the
+// dataset is malformed, it returns math.NaN().
 func CalculateQuantile(q float64, oldSnap, newSnap HistogramSnapshot) float64 {
-	// Defend against mismatched scrape topologies (e.g., vLLM upgrades mid-flight or malformed JSON)
+	if q < 0 || q > 1 {
+		return math.NaN()
+	}
+
+	// Defend against mismatched scrape topologies (e.g., inference engine upgrades mid-flight).
 	if len(oldSnap.Buckets) != len(newSnap.Buckets) {
-		return 0.0
+		return math.NaN()
 	}
 
 	deltaTotalCount := newSnap.Count - oldSnap.Count
 	if deltaTotalCount == 0 {
-		return 0.0 // No traffic in this epoch
+		return math.NaN() // No traffic in this epoch
 	}
 
+	// Calculate the threshold rank representing the specific percentile within the sample frame.
 	rank := q * float64(deltaTotalCount)
 
-	var prevDeltaCumCount uint64 = 0
-	var lowerBound float64 = 0.0
+	var prevDeltaCumCount uint64
+	var lowerBound float64
 
-	for i := 0; i < len(newSnap.Buckets); i++ {
-		upperBound := newSnap.Buckets[i].UpperBound
-		currDeltaCumCount := newSnap.Buckets[i].Count - oldSnap.Buckets[i].Count
+	for i, bucket := range newSnap.Buckets {
+		oldBucketCount := oldSnap.Buckets[i].Count
+
+		// Defend against uint64 underflow if a specific bucket drops uncharacteristically.
+		if bucket.Count < oldBucketCount {
+			return math.NaN()
+		}
+
+		upperBound := bucket.UpperBound
+		currDeltaCumCount := bucket.Count - oldBucketCount
+
+		// Defend against non-monotonic histograms causing underflow.
+		if currDeltaCumCount < prevDeltaCumCount {
+			return math.NaN()
+		}
 
 		if float64(currDeltaCumCount) >= rank {
 			countInBucket := currDeltaCumCount - prevDeltaCumCount
 
-			if countInBucket == 0 {
-				return lowerBound
-			}
-
-			if math.IsInf(upperBound, 1) {
+			if countInBucket == 0 || math.IsInf(upperBound, 1) {
 				return lowerBound
 			}
 
 			bucketWidth := upperBound - lowerBound
 			rankInBucket := rank - float64(prevDeltaCumCount)
 
-			interpolatedValue := lowerBound + ((rankInBucket / float64(countInBucket)) * bucketWidth)
-			return interpolatedValue
+			return lowerBound + ((rankInBucket / float64(countInBucket)) * bucketWidth)
 		}
 
 		lowerBound = upperBound
 		prevDeltaCumCount = currDeltaCumCount
 	}
 
-	if len(newSnap.Buckets) > 0 {
-		lastIdx := len(newSnap.Buckets) - 1
-		if math.IsInf(newSnap.Buckets[lastIdx].UpperBound, 1) && lastIdx > 0 {
-			return newSnap.Buckets[lastIdx-1].UpperBound
+	// Closure to return the highest legal finite boundary, preventing the calculation from
+	// incorrectly returning math.Inf for the infinite buckets.
+	getUpperBound := func(idx int) float64 {
+		if idx > 0 && math.IsInf(newSnap.Buckets[idx].UpperBound, 1) {
+			return newSnap.Buckets[idx-1].UpperBound
 		}
-		return newSnap.Buckets[lastIdx].UpperBound
+		return newSnap.Buckets[idx].UpperBound
 	}
 
-	return 0.0
+	if len(newSnap.Buckets) > 0 {
+		// Walk backwards to find the highest bucket with an actual delta increment.
+		// Reverse searching ensures we retrieve the true peak measurement interval rather than
+		// snapping to the absolute maximum theoretical limit of the histogram.
+		for i := range slices.Backward(newSnap.Buckets) {
+			if newSnap.Buckets[i].Count < oldSnap.Buckets[i].Count {
+				continue
+			}
+			currDiff := newSnap.Buckets[i].Count - oldSnap.Buckets[i].Count
+
+			var prevDiff uint64
+			if i > 0 && newSnap.Buckets[i-1].Count >= oldSnap.Buckets[i-1].Count {
+				prevDiff = newSnap.Buckets[i-1].Count - oldSnap.Buckets[i-1].Count
+			}
+
+			if currDiff > prevDiff {
+				return getUpperBound(i)
+			}
+		}
+		// Fallback to absolute last finite bound if diff probe fails.
+		return getUpperBound(len(newSnap.Buckets) - 1)
+	}
+
+	return math.NaN()
 }
