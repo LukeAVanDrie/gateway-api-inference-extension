@@ -18,6 +18,7 @@ package generic
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 
@@ -83,6 +84,18 @@ func NewGenericPrometheusExtractor(specs map[string]*Spec) *Extractor {
 		},
 		specs: specs,
 	}
+}
+
+// Factory returns the extractor in the registry configuration cycle.
+func Factory(name string, parameters json.RawMessage, handle fwkplugin.Handle) (fwkplugin.Plugin, error) {
+	var specs map[string]*Spec
+	if err := json.Unmarshal(parameters, &specs); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal spec for generic prometheus metrics extractor: %w", err)
+	}
+
+	extractor := NewGenericPrometheusExtractor(specs)
+	extractor.typedName.Name = name
+	return extractor, nil
 }
 
 func (e *Extractor) TypedName() fwkplugin.TypedName {
