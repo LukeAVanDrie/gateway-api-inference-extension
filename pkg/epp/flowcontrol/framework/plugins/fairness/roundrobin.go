@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"slices"
 	"sync"
 
@@ -60,6 +61,7 @@ func (p *roundRobin) TypedName() fwkplugin.TypedName {
 type roundRobinCursor struct {
 	mu           sync.Mutex
 	lastSelected *flowcontrol.FlowKey
+	cachedQueues []flowcontrol.FlowQueueAccessor
 }
 
 // NewState initializes the policy state for a specific priority band.
@@ -71,13 +73,14 @@ func (p *roundRobin) NewState(_ context.Context) any {
 // It retrieves the band-specific state, locks it, and advances the cursor.
 func (p *roundRobin) Pick(
 	_ context.Context,
-	flowGroup flowcontrol.PriorityBandAccessor,
+	state any,
+	queues iter.Seq[flowcontrol.FlowQueueAccessor],
 ) (flowcontrol.FlowQueueAccessor, error) {
-	if flowGroup == nil {
+	if queues == nil {
 		return nil, nil
 	}
 
-	v := flowGroup.PolicyState()
+	v := state
 	c, ok := v.(*roundRobinCursor)
 	if !ok {
 		return nil, fmt.Errorf("invalid state type for RoundRobin policy: expected *roundRobinCursor, got %T", v)
@@ -86,31 +89,37 @@ func (p *roundRobin) Pick(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	keys := flowGroup.FlowKeys()
-	if len(keys) == 0 {
+	c.cachedQueues = c.cachedQueues[:0]
+	for q := range queues {
+		c.cachedQueues = append(c.cachedQueues, q)
+	}
+	qList := c.cachedQueues
+
+	if len(qList) == 0 {
 		c.lastSelected = nil // Reset cursor if no flows are present.
 		return nil, nil
 	}
 
-	// Sort for deterministic ordering.
-	slices.SortFunc(keys, func(a, b flowcontrol.FlowKey) int { return a.Compare(b) })
+	// Sort queues deterministically by their FlowKey.
+	slices.SortFunc(qList, func(a, b flowcontrol.FlowQueueAccessor) int { return a.FlowKey().Compare(b.FlowKey()) })
 
 	startIndex := 0
 	if c.lastSelected != nil {
 		// Find the index of the last selected flow.
 		// If it's not found (e.g., the flow was removed), we'll start from the beginning (index 0).
-		if idx := slices.Index(keys, *c.lastSelected); idx != -1 {
-			startIndex = (idx + 1) % len(keys)
+		idx := slices.IndexFunc(qList, func(q flowcontrol.FlowQueueAccessor) bool { return q.FlowKey() == *c.lastSelected })
+		if idx != -1 {
+			startIndex = (idx + 1) % len(qList)
 		}
 	}
 
-	numFlows := len(keys)
+	numFlows := len(qList)
 	for i := range numFlows {
 		currentIdx := (startIndex + i) % numFlows
-		currentKey := keys[currentIdx]
-		queue := flowGroup.Queue(currentKey.ID)
-		if queue != nil && queue.Len() > 0 {
-			c.lastSelected = &currentKey
+		queue := qList[currentIdx]
+		if queue.Len() > 0 {
+			key := queue.FlowKey()
+			c.lastSelected = &key
 			return queue, nil
 		}
 	}

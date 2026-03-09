@@ -17,6 +17,8 @@ limitations under the License.
 package contracts
 
 import (
+	"iter"
+
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 )
 
@@ -53,11 +55,12 @@ type FlowRegistry interface {
 
 // FlowRegistryObserver defines the read-only, observation interface for the registry.
 type FlowRegistryObserver interface {
-	// Stats returns a near-consistent snapshot globally aggregated statistics for the entire `FlowRegistry`.
-	Stats() AggregateStats
+	// ActiveShardIDs returns an iterator of identifiers for all shards currently considered active.
+	// This is used by background processes (like the orchestrator) to discover which shards require processing loops.
+	ActiveShardIDs() iter.Seq[string]
 
-	// ShardStats returns a near-consistent slice of statistics snapshots, one for each `RegistryShard`.
-	ShardStats() []ShardStats
+	// ActiveShards returns a current snapshot of accessors for all Active internal state shards.
+	ActiveShards() iter.Seq[RegistryShard]
 }
 
 // FlowRegistryDataPlane defines the high-throughput, request-path interface for the registry.
@@ -69,7 +72,7 @@ type FlowRegistryDataPlane interface {
 	// 1. Just-In-Time (JIT) Registration: If the flow for the given FlowKey does not exist, it is created and registered
 	//    automatically.
 	// 2. Lease Acquisition: It acquires a lifecycle lease, protecting the flow from garbage collection.
-	// 3. Callback Execution: It invokes the provided function `fn`, passing in a temporary `ActiveFlowConnection` handle.
+	// 3. Callback Execution: It invokes the provided function `fn`.
 	// 4. Guaranteed Lease Release: It ensures the lease is safely released when the callback function returns.
 	//
 	// This functional, callback-based approach makes resource leaks impossible, as the caller is not responsible for
@@ -77,24 +80,7 @@ type FlowRegistryDataPlane interface {
 	//
 	// Errors returned by the callback `fn` are propagated up.
 	// Returns `ErrFlowIDEmpty` if the provided key has an empty ID.
-	WithConnection(key flowcontrol.FlowKey, fn func(conn ActiveFlowConnection) error) error
-}
-
-// ActiveFlowConnection represents a handle to a scoped, leased session on a flow.
-// It provides a safe entry point to the registry's sharded data plane.
-//
-// An `ActiveFlowConnection` instance is only valid for the duration of the `WithConnection` callback from which it was
-// received. Callers MUST NOT store a reference to this object or use it after the callback returns.
-//
-// Lifecycle & Pinning:
-// This interface represents an active "Lease" on the flow. As long as this object is valid (within the callback), the
-// Flow Registry guarantees that the underlying Flow State is "Pinned" and protected from Garbage Collection.
-type ActiveFlowConnection interface {
-	// ActiveShards returns a current snapshot of accessors for all Active internal state shards.
-	ActiveShards() []RegistryShard
-
-	// FlowKey returns the immutable identity of the flow this connection is pinned to.
-	FlowKey() flowcontrol.FlowKey
+	WithConnection(key flowcontrol.FlowKey, fn func() error) error
 }
 
 // RegistryShard defines the interface for a single slice (shard) of the `FlowRegistry`'s state.
@@ -125,22 +111,22 @@ type RegistryShard interface {
 	//   - error: A wrapped ErrPriorityBandNotFound if the priority level is not configured on this shard.
 	FairnessPolicy(priority int) (flowcontrol.FairnessPolicy, error)
 
-	// PriorityBandAccessor retrieves the read-only view of the "Flow Group" for a specific priority level.
-	// This accessor provides the state of all contending flows within the band (as seen by this shard) and serves as the
-	// primary input for FairnessPolicy execution.
+	// PriorityBandState retrieves the state and iterator required by a FairnessPolicy.
 	//
 	// Returns an error wrapping ErrPriorityBandNotFound if the priority level is not configured.
-	PriorityBandAccessor(priority int) (flowcontrol.PriorityBandAccessor, error)
+	PriorityBandState(priority int) (state any, queues iter.Seq[flowcontrol.FlowQueueAccessor], err error)
 
 	// AllOrderedPriorityLevels returns all configured priority levels that this shard is aware of, sorted in descending
 	// numerical order. This order corresponds to highest priority (highest numeric value) to lowest priority (lowest
 	// numeric value).
-	// The returned slice provides a definitive, ordered list of priority levels for iteration, for example, by a
+	// The returned iterator provides a definitive, ordered list of priority levels for iteration, for example, by a
 	// `controller.FlowController` worker's dispatch loop.
-	AllOrderedPriorityLevels() []int
+	AllOrderedPriorityLevels() iter.Seq[int]
 
-	// Stats returns a near consistent snapshot of the shard's state.
-	Stats() ShardStats
+	// HasCapacity checks if the shard has enough capacity to admit a new item of the specified size at the given
+	// priority level.
+	// This validates both the global shard limit and the per-band limit in a lock-free manner.
+	HasCapacity(priority int, itemByteSize uint64) bool
 }
 
 // ManagedQueue defines the interface for a flow's queue on a specific shard.
@@ -166,62 +152,4 @@ type ManagedQueue interface {
 	// FlowQueueAccessor returns a read-only, flow-aware accessor for this queue, used by policy plugins.
 	// Conformance: This method MUST NOT return nil.
 	FlowQueueAccessor() flowcontrol.FlowQueueAccessor
-}
-
-// AggregateStats holds globally aggregated statistics for the entire `FlowRegistry`.
-// It is a read-only data object representing a near-consistent snapshot of the registry's state.
-type AggregateStats struct {
-	// TotalCapacityBytes is the globally configured maximum total byte size limit across all priority bands and shards.
-	TotalCapacityBytes uint64
-	// TotalByteSize is the total byte size of all items currently queued across the entire system.
-	TotalByteSize uint64
-	// TotalLen is the total number of items currently queued across the entire system.
-	TotalLen uint64
-	// PerPriorityBandStats maps each configured priority level to its globally aggregated statistics.
-	PerPriorityBandStats map[int]PriorityBandStats
-}
-
-// ShardStats holds statistics and identifying information for a `RegistryShard` within the `FlowRegistry`.
-// It is a read-only data object representing a near-consistent snapshot of the shard's state.
-type ShardStats struct {
-	// ID is the unique, stable identifier for this shard.
-	ID string
-	// IsActive indicates if the shard was accepting new work at the time this stats snapshot was generated.
-	// A value of `false` means the shard is in the process of being gracefully drained.
-	// Due to the concurrent nature of the system, this state could change immediately after the snapshot is taken.
-	IsActive bool
-	// TotalCapacityBytes is the optional, maximum total byte size limit aggregated across all priority bands within this
-	// shard. Its value represents the globally configured limit for the `FlowRegistry` partitioned for this shard.
-	// The `controller.FlowController` enforces this limit in addition to any per-band capacity limits.
-	// A value of 0 signifies that this global limit is ignored, and only per-band limits apply.
-	TotalCapacityBytes uint64
-	// TotalByteSize is the total byte size of all items currently queued across all priority bands within this shard.
-	TotalByteSize uint64
-	// TotalLen is the total number of items currently queued across all priority bands within this shard.
-	TotalLen uint64
-	// PerPriorityBandStats maps each configured priority level to its statistics within this shard.
-	// The capacity values within represent this shard's partition of the global band capacity.
-	// The key is the numerical priority level.
-	// All configured priority levels are guaranteed to be represented.
-	PerPriorityBandStats map[int]PriorityBandStats
-}
-
-// PriorityBandStats holds aggregated statistics for a single priority band.
-// It is a read-only data object representing a near-consistent snapshot of the priority band's state.
-type PriorityBandStats struct {
-	// Priority is the numerical priority level this struct describes.
-	Priority int
-	// PriorityName is a human-readable name for the priority band (e.g., "Critical", "Sheddable").
-	// The registry configuration requires this field, so it is guaranteed to be non-empty.
-	PriorityName string
-	// CapacityBytes is the configured maximum total byte size for this priority band.
-	// When viewed via `AggregateStats`, this is the global limit. When viewed via `ShardStats`, this is the partitioned
-	// value for that specific shard.
-	// The `controller.FlowController` enforces this limit.
-	// A default non-zero value is guaranteed if not configured.
-	CapacityBytes uint64
-	// ByteSize is the total byte size of items currently queued in this priority band.
-	ByteSize uint64
-	// Len is the total number of items currently queued in this priority band.
-	Len uint64
 }

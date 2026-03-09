@@ -18,6 +18,7 @@ package fairness
 
 import (
 	"context"
+	"iter"
 	"testing"
 	"time"
 
@@ -38,26 +39,18 @@ func newTestOrderingPolicy() *mocks.MockOrderingPolicy {
 	}
 }
 
-func newTestBand(queues ...flowcontrol.FlowQueueAccessor) *mocks.MockPriorityBandAccessor {
-	flowKeys := make([]flowcontrol.FlowKey, 0, len(queues))
+func newTestQueues(queues ...flowcontrol.FlowQueueAccessor) iter.Seq[flowcontrol.FlowQueueAccessor] {
 	queuesByID := make(map[string]flowcontrol.FlowQueueAccessor, len(queues))
 	for _, q := range queues {
 		key := q.FlowKey()
-		flowKeys = append(flowKeys, key)
 		queuesByID[key.ID] = q
 	}
-	return &mocks.MockPriorityBandAccessor{
-		FlowKeysFunc: func() []flowcontrol.FlowKey { return flowKeys },
-		QueueFunc: func(id string) flowcontrol.FlowQueueAccessor {
-			return queuesByID[id]
-		},
-		IterateQueuesFunc: func(iterator func(flow flowcontrol.FlowQueueAccessor) bool) {
-			for _, key := range flowKeys {
-				if !iterator(queuesByID[key.ID]) {
-					break
-				}
+	return func(yield func(flowcontrol.FlowQueueAccessor) bool) {
+		for _, q := range queues {
+			if !yield(q) {
+				return
 			}
-		},
+		}
 	}
 }
 
@@ -102,29 +95,30 @@ func TestGlobalStrict_Pick(t *testing.T) {
 
 	testCases := []struct {
 		name            string
-		band            flowcontrol.PriorityBandAccessor
+		state           any
+		queues          iter.Seq[flowcontrol.FlowQueueAccessor]
 		expectedQueueID string
 		expectedErr     error
 		shouldPanic     bool
 	}{
 		{
 			name:            "BasicSelection_TwoQueues",
-			band:            newTestBand(queue1, queue2),
+			queues:          newTestQueues(queue1, queue2),
 			expectedQueueID: flow1ID,
 		},
 		{
 			name:            "IgnoresEmptyQueues",
-			band:            newTestBand(queue1, queueEmpty, queue2),
+			queues:          newTestQueues(queue1, queueEmpty, queue2),
 			expectedQueueID: flow1ID,
 		},
 		{
 			name:            "SingleNonEmptyQueue",
-			band:            newTestBand(queue1),
+			queues:          newTestQueues(queue1),
 			expectedQueueID: flow1ID,
 		},
 		{
 			name: "OrderingPolicyCompatibility",
-			band: newTestBand(
+			queues: newTestQueues(
 				&mocks.MockFlowQueueAccessor{
 					LenV:      1,
 					PeekHeadV: itemBetter,
@@ -152,7 +146,7 @@ func TestGlobalStrict_Pick(t *testing.T) {
 		},
 		{
 			name: "OrderingPolicyIsNil",
-			band: newTestBand(
+			queues: newTestQueues(
 				&mocks.MockFlowQueueAccessor{
 					LenV:            1,
 					PeekHeadV:       itemBetter,
@@ -165,7 +159,7 @@ func TestGlobalStrict_Pick(t *testing.T) {
 		},
 		{
 			name: "AllQueuesEmpty",
-			band: newTestBand(
+			queues: newTestQueues(
 				queueEmpty,
 				&mocks.MockFlowQueueAccessor{
 					LenV:            0,
@@ -176,8 +170,8 @@ func TestGlobalStrict_Pick(t *testing.T) {
 			),
 		},
 		{
-			name: "NilBand",
-			band: nil,
+			name:   "NilBand",
+			queues: nil,
 		},
 	}
 
@@ -186,11 +180,11 @@ func TestGlobalStrict_Pick(t *testing.T) {
 			t.Parallel()
 
 			if tc.shouldPanic {
-				assert.Panics(t, func() { _, _ = policy.Pick(ctx, tc.band) }, "Pick should panic for this edge case")
+				assert.Panics(t, func() { _, _ = policy.Pick(ctx, nil, tc.queues) }, "Pick should panic for this edge case")
 				return
 			}
 
-			selected, err := policy.Pick(ctx, tc.band)
+			selected, err := policy.Pick(ctx, nil, tc.queues)
 
 			if tc.expectedErr != nil {
 				require.Error(t, err, "Pick should return an error")

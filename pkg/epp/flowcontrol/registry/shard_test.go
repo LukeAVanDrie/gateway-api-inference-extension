@@ -18,6 +18,7 @@ package registry
 
 import (
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -121,7 +122,7 @@ func TestShard_New(t *testing.T) {
 
 		assert.Equal(t, "test-shard-1", h.shard.ID(), "Shard ID must match the value provided during construction")
 		assert.True(t, h.shard.IsActive(), "A newly created shard must be initialized in the Active state")
-		assert.Equal(t, []int{highPriority, lowPriority}, h.shard.AllOrderedPriorityLevels(),
+		assert.Equal(t, []int{highPriority, lowPriority}, slices.Collect(h.shard.AllOrderedPriorityLevels()),
 			"Shard must report configured priority levels sorted numerically (highest priority first)")
 
 		val, ok := h.shard.priorityBands.Load(highPriority)
@@ -132,26 +133,6 @@ func TestShard_New(t *testing.T) {
 		assert.Equal(t, DefaultFairnessPolicyRef, bandHigh.fairnessPolicy.TypedName().Name,
 			"Must match the configured fairness policy implementation")
 	})
-}
-
-func TestShard_Stats(t *testing.T) {
-	t.Parallel()
-	h := newShardTestHarness(t)
-	h.addItem(h.highPriorityKey1, 100)
-	h.addItem(h.highPriorityKey1, 50)
-
-	stats := h.shard.Stats()
-
-	assert.Equal(t, h.shard.ID(), stats.ID, "Stats ID must match the shard ID")
-	assert.True(t, stats.IsActive, "Shard must report itself as active in the stats snapshot")
-	assert.Equal(t, uint64(2), stats.TotalLen, "Total shard length must aggregate counts from all bands")
-	assert.Equal(t, uint64(150), stats.TotalByteSize, "Total shard byte size must aggregate sizes from all bands")
-
-	bandHighStats, ok := stats.PerPriorityBandStats[highPriority]
-	require.True(t, ok, "Stats snapshot must include entries for all configured priority bands (e.g., %d)", highPriority)
-	assert.Equal(t, uint64(2), bandHighStats.Len, "Priority band length must reflect the items queued at that level")
-	assert.Equal(t, uint64(150), bandHighStats.ByteSize,
-		"Priority band byte size must reflect the items queued at that level")
 }
 
 func TestShard_Accessors(t *testing.T) {
@@ -225,13 +206,13 @@ func TestShard_Accessors(t *testing.T) {
 	})
 }
 
-func TestShard_PriorityBandAccessor(t *testing.T) {
+func TestShard_PriorityBandState(t *testing.T) {
 	t.Parallel()
 
 	t.Run("ShouldFail_WhenPriorityDoesNotExist", func(t *testing.T) {
 		t.Parallel()
 		h := newShardTestHarness(t)
-		_, err := h.shard.PriorityBandAccessor(nonExistentPriority)
+		_, _, err := h.shard.PriorityBandState(nonExistentPriority)
 		assert.ErrorIs(t, err, contracts.ErrPriorityBandNotFound,
 			"Requesting an accessor for an unconfigured priority must fail with ErrPriorityBandNotFound")
 	})
@@ -239,62 +220,29 @@ func TestShard_PriorityBandAccessor(t *testing.T) {
 	t.Run("ShouldSucceed_WhenPriorityExists", func(t *testing.T) {
 		t.Parallel()
 		h := newShardTestHarness(t)
-		accessor, err := h.shard.PriorityBandAccessor(h.highPriorityKey1.Priority)
+		_, queues, err := h.shard.PriorityBandState(h.highPriorityKey1.Priority)
 		require.NoError(t, err, "Requesting an accessor for a configured priority must succeed")
-		require.NotNil(t, accessor, "The returned accessor instance must not be nil")
-
-		t.Run("Properties_ShouldReturnCorrectValues", func(t *testing.T) {
-			t.Parallel()
-			assert.Equal(t, h.highPriorityKey1.Priority, accessor.Priority(),
-				"Accessor Priority() must match the configured numerical priority")
-			assert.Equal(t, "High", accessor.PriorityName(), "Accessor PriorityName() must match the configured name")
-		})
-
-		t.Run("FlowKeys_ShouldReturnAllKeysInBand", func(t *testing.T) {
-			t.Parallel()
-			keys := accessor.FlowKeys()
-			expectedKeys := []flowcontrol.FlowKey{h.highPriorityKey1, h.highPriorityKey2}
-			assert.ElementsMatch(t, expectedKeys, keys,
-				"FlowKeys() must return a complete snapshot of all flows registered in this band")
-		})
-
-		t.Run("Queue_ShouldReturnCorrectAccessor", func(t *testing.T) {
-			t.Parallel()
-			q := accessor.Queue(h.highPriorityKey1.ID)
-			require.NotNil(t, q, "Queue() must return a non-nil accessor for a registered flow ID")
-			assert.Equal(t, h.highPriorityKey1, q.FlowKey(), "The returned queue accessor must have the correct FlowKey")
-			assert.Nil(t, accessor.Queue("non-existent"), "Queue() must return nil if the flow ID is not found in this band")
-		})
+		require.NotNil(t, queues, "The returned queues sequence must not be nil")
 
 		t.Run("IterateQueues", func(t *testing.T) {
 			t.Parallel()
 
-			t.Run("ShouldVisitAllQueuesInBand", func(t *testing.T) {
+			t.Run("ShouldReturnAllQueuesInBand", func(t *testing.T) {
 				t.Parallel()
+				//nolint:prealloc // iterators don't have a computable length
 				var iteratedKeys []flowcontrol.FlowKey
-				accessor.IterateQueues(func(queue flowcontrol.FlowQueueAccessor) bool {
-					iteratedKeys = append(iteratedKeys, queue.FlowKey())
-					return true
-				})
+				for q := range queues {
+					iteratedKeys = append(iteratedKeys, q.FlowKey())
+				}
 				expectedKeys := []flowcontrol.FlowKey{h.highPriorityKey1, h.highPriorityKey2}
 				assert.ElementsMatch(t, expectedKeys, iteratedKeys,
-					"IterateQueues must visit every registered flow in the band exactly once")
-			})
-
-			t.Run("ShouldExitEarly_WhenCallbackReturnsFalse", func(t *testing.T) {
-				t.Parallel()
-				var iterationCount int
-				accessor.IterateQueues(func(queue flowcontrol.FlowQueueAccessor) bool {
-					iterationCount++
-					return false
-				})
-				assert.Equal(t, 1, iterationCount, "IterateQueues must terminate immediately when the callback returns false")
+					"Queues must return every registered flow in the band")
 			})
 
 			t.Run("ShouldBeSafe_DuringConcurrentMapModification", func(t *testing.T) {
 				t.Parallel()
 				h := newShardTestHarness(t) // Isolated harness to avoid corrupting the state for other parallel tests
-				accessor, err := h.shard.PriorityBandAccessor(highPriority)
+				_, queues, err := h.shard.PriorityBandState(highPriority)
 				require.NoError(t, err)
 
 				var wg sync.WaitGroup
@@ -303,19 +251,18 @@ func TestShard_PriorityBandAccessor(t *testing.T) {
 				// Goroutine A: The Iterator (constantly reading)
 				go func() {
 					defer wg.Done()
-					for i := 0; i < 100; i++ {
-						accessor.IterateQueues(func(queue flowcontrol.FlowQueueAccessor) bool {
+					for range 100 {
+						for queue := range queues {
 							// Accessing data should not panic or race.
 							_ = queue.FlowKey()
-							return true
-						})
+						}
 					}
 				}()
 
 				// Goroutine B: The Modifier (constantly writing)
 				go func() {
 					defer wg.Done()
-					for i := 0; i < 100; i++ {
+					for i := range 100 {
 						key := flowcontrol.FlowKey{ID: fmt.Sprintf("new-flow-%d", i), Priority: highPriority}
 						h.synchronizeFlow(key)
 						h.shard.deleteFlow(key)
@@ -332,19 +279,14 @@ func TestShard_PriorityBandAccessor(t *testing.T) {
 			t.Parallel()
 			h := newShardTestHarness(t)
 			h.shard.deleteFlow(h.lowPriorityKey)
-			accessor, err := h.shard.PriorityBandAccessor(lowPriority)
+			_, queues, err := h.shard.PriorityBandState(lowPriority)
 			require.NoError(t, err, "Setup: getting an accessor for an empty band must succeed")
 
-			keys := accessor.FlowKeys()
-			assert.NotNil(t, keys, "FlowKeys() on an empty band must return a non-nil slice")
-			assert.Empty(t, keys, "FlowKeys() on an empty band must return an empty slice")
-
-			var callbackExecuted bool
-			accessor.IterateQueues(func(queue flowcontrol.FlowQueueAccessor) bool {
-				callbackExecuted = true
-				return true
-			})
-			assert.False(t, callbackExecuted, "IterateQueues must not execute the callback for an empty band")
+			var count int
+			for range queues {
+				count++
+			}
+			assert.Zero(t, count, "Queues must return empty sequence for an empty band")
 		})
 	})
 }
@@ -408,12 +350,11 @@ func TestShard_DynamicProvisioning(t *testing.T) {
 		h.shard.addPriorityBand(dynamicPrio)
 
 		expectedLevels := []int{highPriority, dynamicPrio, lowPriority} // 20, 15, 10
-		assert.Equal(t, expectedLevels, h.shard.AllOrderedPriorityLevels(),
+		assert.Equal(t, expectedLevels, slices.Collect(h.shard.AllOrderedPriorityLevels()),
 			"New priority must be inserted into the sorted order correctly")
 
-		accessor, err := h.shard.PriorityBandAccessor(dynamicPrio)
+		_, _, err = h.shard.PriorityBandState(dynamicPrio)
 		require.NoError(t, err, "Accessor should be available for the new band")
-		assert.Equal(t, "Dynamic-15", accessor.PriorityName())
 	})
 
 	t.Run("ShouldBeIdempotent", func(t *testing.T) {
@@ -431,7 +372,7 @@ func TestShard_DynamicProvisioning(t *testing.T) {
 		h.shard.addPriorityBand(dynamicPrio)
 
 		levelCount := 0
-		for _, p := range h.shard.AllOrderedPriorityLevels() {
+		for p := range h.shard.AllOrderedPriorityLevels() {
 			if p == dynamicPrio {
 				levelCount++
 			}
@@ -476,10 +417,11 @@ func TestShard_Concurrency_MixedWorkload(t *testing.T) {
 				case <-stopCh:
 					return
 				default:
-					for _, priority := range h.shard.AllOrderedPriorityLevels() {
-						accessor, err := h.shard.PriorityBandAccessor(priority)
+					for priority := range h.shard.AllOrderedPriorityLevels() {
+						_, queues, err := h.shard.PriorityBandState(priority)
 						if err == nil {
-							accessor.IterateQueues(func(q flowcontrol.FlowQueueAccessor) bool { return true })
+							for range queues {
+							}
 						}
 					}
 				}
@@ -512,8 +454,19 @@ func TestShard_Concurrency_MixedWorkload(t *testing.T) {
 	readersWg.Wait()
 
 	// The primary assertion is that this test completes without the race detector firing; however, we can make some final
-	// assertions on state consistency.
-	finalStats := h.shard.Stats()
-	assert.Zero(t, finalStats.TotalLen, "After all paired add/remove operations, the total length should be zero")
-	assert.Zero(t, finalStats.TotalByteSize, "After all paired add/remove operations, the total byte size should be zero")
+	// assertions on state consistency using black-box probing.
+	var finalLen int
+	var finalBytes uint64
+
+	for priority := range h.shard.AllOrderedPriorityLevels() {
+		_, queues, err := h.shard.PriorityBandState(priority)
+		if err == nil {
+			for queue := range queues {
+				finalLen += queue.Len()
+				finalBytes += queue.ByteSize()
+			}
+		}
+	}
+	assert.Zero(t, finalLen, "After all paired add/remove operations, the apparent length across all queues should be zero")
+	assert.Zero(t, finalBytes, "After all paired add/remove operations, the apparent byte size across all queues should be zero")
 }

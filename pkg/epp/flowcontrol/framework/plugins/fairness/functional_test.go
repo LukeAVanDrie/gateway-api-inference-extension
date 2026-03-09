@@ -19,6 +19,7 @@ package fairness
 import (
 	"context"
 	"encoding/json"
+	"iter"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -81,56 +82,38 @@ func runPickConformanceTests(t *testing.T, policy flowcontrol.FairnessPolicy) {
 
 	testCases := []struct {
 		name          string
-		band          flowcontrol.PriorityBandAccessor
+		queues        iter.Seq[flowcontrol.FlowQueueAccessor]
 		expectErr     bool
 		expectNil     bool
 		expectedQueue flowcontrol.FlowQueueAccessor
 	}{
 		{
 			name:      "With a nil priority band accessor",
-			band:      nil,
+			queues:    nil,
 			expectErr: false,
 			expectNil: true,
 		},
 		{
-			name: "With an empty priority band accessor",
-			band: &frameworkmocks.MockPriorityBandAccessor{
-				PolicyStateV:      state,
-				FlowKeysFunc:      func() []flowcontrol.FlowKey { return []flowcontrol.FlowKey{} },
-				IterateQueuesFunc: func(callback func(flow flowcontrol.FlowQueueAccessor) bool) { /* no-op */ },
-			},
+			name:      "With an empty priority band accessor",
+			queues:    func(yield func(flowcontrol.FlowQueueAccessor) bool) {},
 			expectErr: false,
 			expectNil: true,
 		},
 		{
 			name: "With a band that has one empty queue",
-			band: &frameworkmocks.MockPriorityBandAccessor{
-				PolicyStateV: state,
-				FlowKeysFunc: func() []flowcontrol.FlowKey { return []flowcontrol.FlowKey{{ID: flowIDEmpty}} },
-				QueueFunc: func(fID string) flowcontrol.FlowQueueAccessor {
-					if fID == flowIDEmpty {
-						return mockQueueEmpty
-					}
-					return nil
-				},
-				IterateQueuesFunc: func(callback func(flow flowcontrol.FlowQueueAccessor) bool) { callback(mockQueueEmpty) },
+			queues: func(yield func(flowcontrol.FlowQueueAccessor) bool) {
+				yield(mockQueueEmpty)
 			},
 			expectErr: false,
 			expectNil: true,
 		},
 		{
 			name: "With a band that has multiple empty queues",
-			band: &frameworkmocks.MockPriorityBandAccessor{
-				PolicyStateV: state,
-				FlowKeysFunc: func() []flowcontrol.FlowKey { return []flowcontrol.FlowKey{{ID: flowIDEmpty}, {ID: "flow-empty-2"}} },
-				QueueFunc:    func(fID string) flowcontrol.FlowQueueAccessor { return mockQueueEmpty },
-				IterateQueuesFunc: func(callback func(flow flowcontrol.FlowQueueAccessor) bool) {
-					// Iterate over two empty queues.
-					if !callback(mockQueueEmpty) {
-						return
-					}
-					callback(mockQueueEmpty)
-				},
+			queues: func(yield func(flowcontrol.FlowQueueAccessor) bool) {
+				if !yield(mockQueueEmpty) {
+					return
+				}
+				yield(mockQueueEmpty)
 			},
 			expectErr: false,
 			expectNil: true,
@@ -141,7 +124,7 @@ func runPickConformanceTests(t *testing.T, policy flowcontrol.FairnessPolicy) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			selectedQueue, err := policy.Pick(ctx, tc.band)
+			selectedQueue, err := policy.Pick(ctx, state, tc.queues)
 
 			if tc.expectErr {
 				require.Error(t, err, "Pick() should return an error")

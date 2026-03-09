@@ -89,11 +89,9 @@ func newRegistryTestHarness(t *testing.T, opts harnessOptions) *registryTestHarn
 		// Start the GC loop in the background.
 		ctx, cancel := context.WithCancel(context.Background())
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			fr.Run(ctx)
-		}()
+		})
 		t.Cleanup(func() {
 			cancel()
 			wg.Wait()
@@ -111,19 +109,21 @@ func newRegistryTestHarness(t *testing.T, opts harnessOptions) *registryTestHarn
 // assertFlowExists synchronously checks if a flow's queue exists on the first shard.
 func (h *registryTestHarness) assertFlowExists(key flowcontrol.FlowKey, msgAndArgs ...any) {
 	h.t.Helper()
-	require.NotEmpty(h.t, h.fr.allShards, "Cannot check for flow existence when no shards are present")
-	_, err := h.fr.allShards[0].ManagedQueue(key)
+	shards := *h.fr.allShards.Load()
+	require.NotEmpty(h.t, shards, "Cannot check for flow existence when no shards are present")
+	_, err := shards[0].ManagedQueue(key)
 	assert.NoError(h.t, err, msgAndArgs...)
 }
 
 // assertFlowDoesNotExist synchronously checks if a flow's queue does not exist.
 func (h *registryTestHarness) assertFlowDoesNotExist(key flowcontrol.FlowKey, msgAndArgs ...any) {
 	h.t.Helper()
-	if len(h.fr.allShards) == 0 {
+	shards := *h.fr.allShards.Load()
+	if len(shards) == 0 {
 		assert.True(h.t, true, "Flow correctly does not exist because no shards exist")
 		return
 	}
-	_, err := h.fr.allShards[0].ManagedQueue(key)
+	_, err := shards[0].ManagedQueue(key)
 	require.Error(h.t, err, "Expected an error when getting a non-existent flow, but got none")
 	assert.ErrorIs(h.t, err, contracts.ErrFlowInstanceNotFound, msgAndArgs...)
 }
@@ -131,7 +131,7 @@ func (h *registryTestHarness) assertFlowDoesNotExist(key flowcontrol.FlowKey, ms
 // openConnectionOnFlow ensures a flow is registered for the provided `key`.
 func (h *registryTestHarness) openConnectionOnFlow(key flowcontrol.FlowKey) {
 	h.t.Helper()
-	err := h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error { return nil })
+	err := h.fr.WithConnection(key, func() error { return nil })
 	require.NoError(h.t, err, "Registering flow %s should not fail", key)
 	h.assertFlowExists(key, "Flow %s should exist after registration", key)
 }
@@ -148,9 +148,8 @@ func TestFlowRegistry_WithConnection_AndHandle(t *testing.T) {
 
 		h.assertFlowDoesNotExist(key, "Flow should not exist before the first connection")
 
-		err := h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error {
+		err := h.fr.WithConnection(key, func() error {
 			h.assertFlowExists(key, "Flow should exist immediately after JIT registration within the connection")
-			require.NotNil(t, conn, "Connection handle provided to callback must not be nil")
 			return nil
 		})
 
@@ -163,7 +162,7 @@ func TestFlowRegistry_WithConnection_AndHandle(t *testing.T) {
 		h := newRegistryTestHarness(t, harnessOptions{})
 		key := flowcontrol.FlowKey{ID: "", Priority: highPriority} // Invalid key
 
-		err := h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error {
+		err := h.fr.WithConnection(key, func() error {
 			t.Fatal("Callback must not be executed when the provided flow key is invalid")
 			return nil
 		})
@@ -197,7 +196,7 @@ func TestFlowRegistry_WithConnection_AndHandle(t *testing.T) {
 		h := newRegistryTestHarness(t, harnessOptions{config: cfg})
 		key := flowcontrol.FlowKey{ID: "test-flow", Priority: highPriority}
 
-		err = h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error {
+		err = h.fr.WithConnection(key, func() error {
 			t.Fatal("Callback must not be executed when the flow fails to register JIT")
 			return nil
 		})
@@ -212,70 +211,26 @@ func TestFlowRegistry_WithConnection_AndHandle(t *testing.T) {
 		h := newRegistryTestHarness(t, harnessOptions{initialShardCount: 3})
 		err := h.fr.updateShardCount(2) // This leaves one shard in the Draining state.
 		require.NoError(t, err, "Test setup: scaling down to create a draining shard should not fail")
-		require.Len(t, h.fr.allShards, 3, "Test setup: should have 2 active and 1 draining shard")
+		shards := *h.fr.allShards.Load()
+		require.Len(t, shards, 3, "Test setup: should have 2 active and 1 draining shard")
 
 		key := flowcontrol.FlowKey{ID: "test-flow", Priority: highPriority}
 
-		err = h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error {
-			shards := conn.ActiveShards()
+		err = h.fr.WithConnection(key, func() error {
+			shards := h.fr.ActiveShards()
 
-			assert.Len(t, shards, 2, "ActiveShards() must only return the Active shards")
+			//nolint:prealloc // iterators don't have a computable length
+			var active []contracts.RegistryShard
+			for s := range shards {
+				active = append(active, s)
+			}
 
-			// Assert it's a copy by maliciously modifying it.
-			require.NotEmpty(t, shards, "Test setup assumes shards are present")
-			shards[0] = nil // Modify the local copy.
+			assert.Len(t, active, 2, "ActiveShards() must only return the Active shards")
 
 			return nil
 		})
 		require.NoError(t, err)
-
-		// Prove the registry's internal state was not mutated by the modification.
-		assert.NotNil(t, h.fr.activeShards[0],
-			"Modifying the slice returned by ActiveShards() must not affect the registry's internal state")
 	})
-}
-
-// --- `FlowRegistryAdmin` API Tests ---
-
-func TestFlowRegistry_Stats(t *testing.T) {
-	t.Parallel()
-
-	h := newRegistryTestHarness(t, harnessOptions{initialShardCount: 2})
-	keyHigh := flowcontrol.FlowKey{ID: "high-pri-flow", Priority: highPriority}
-	keyLow := flowcontrol.FlowKey{ID: "low-pri-flow", Priority: lowPriority}
-	h.openConnectionOnFlow(keyHigh)
-	h.openConnectionOnFlow(keyLow)
-
-	shards := h.fr.allShards
-	require.Len(t, shards, 2, "Test setup assumes 2 shards")
-	mqHigh0, _ := shards[0].ManagedQueue(keyHigh)
-	mqHigh1, _ := shards[1].ManagedQueue(keyHigh)
-	mqLow1, _ := shards[1].ManagedQueue(keyLow)
-	require.NoError(t, mqHigh0.Add(mocks.NewMockQueueItemAccessor(10, "req1", keyHigh)),
-		"Adding item to queue should not fail")
-	require.NoError(t, mqHigh1.Add(mocks.NewMockQueueItemAccessor(20, "req2", keyHigh)),
-		"Adding item to queue should not fail")
-	require.NoError(t, mqLow1.Add(mocks.NewMockQueueItemAccessor(30, "req3", keyLow)),
-		"Adding item to queue should not fail")
-
-	// Although the production `Stats()` method provides a 'fuzzy snapshot' under high contention, our test validates it
-	// in a quiescent state, so these assertions can and must be exact.
-	globalStats := h.fr.Stats()
-	assert.Equal(t, uint64(3), globalStats.TotalLen, "Global TotalLen should be the sum of all items")
-	assert.Equal(t, uint64(60), globalStats.TotalByteSize, "Global TotalByteSize should be the sum of all item sizes")
-
-	shardStats := h.fr.ShardStats()
-	require.Len(t, shardStats, 2, "Should return stats for 2 shards")
-	var totalShardLen, totalShardBytes uint64
-	for _, ss := range shardStats {
-		assert.True(t, ss.IsActive, "All shards should be active in this test")
-		assert.NotEmpty(t, ss.PerPriorityBandStats, "Each shard should have stats for its priority bands")
-		assert.NotEmpty(t, ss.ID, "Each shard should have a non-empty ID")
-		totalShardLen += ss.TotalLen
-		totalShardBytes += ss.TotalByteSize
-	}
-	assert.Equal(t, globalStats.TotalLen, totalShardLen, "Sum of shard lengths must equal global length")
-	assert.Equal(t, globalStats.TotalByteSize, totalShardBytes, "Sum of shard byte sizes must equal global byte size")
 }
 
 // --- Garbage Collection Tests ---
@@ -301,19 +256,17 @@ func TestFlowRegistry_GarbageCollection(t *testing.T) {
 		var wg sync.WaitGroup
 		leaseAcquired := make(chan struct{})
 		releaseLease := make(chan struct{})
-		wg.Add(1)
 
-		go func() {
+		wg.Go(func() {
 			// This goroutine holds the lease. It will not exit until the main test goroutine calls `wg.Done()`.
-			defer wg.Done()
-			err := h.fr.WithConnection(key, func(contracts.ActiveFlowConnection) error {
+			err := h.fr.WithConnection(key, func() error {
 				close(leaseAcquired) // Signal to the main test that the lease is now active.
 				<-releaseLease       // Block here, holding the lease, until signaled.
 
 				return nil
 			})
 			require.NoError(t, err, "WithConnection in the background goroutine should not fail")
-		}()
+		})
 		t.Cleanup(func() {
 			close(releaseLease) // Unblock the goroutine.
 			wg.Wait()           // Wait for the goroutine to fully exit.
@@ -408,55 +361,43 @@ func TestFlowRegistry_UpdateShardCount(t *testing.T) {
 		bandCapacity   = 50
 	)
 	testCases := []struct {
-		name                                string
-		initialShardCount                   int
-		targetShardCount                    int
-		expectedActiveCount                 int
-		expectedPartitionedGlobalCapacities map[uint64]int
-		expectedPartitionedBandCapacities   map[uint64]int
-		expectErrIs                         error // Optional
+		name                string
+		initialShardCount   int
+		targetShardCount    int
+		expectedActiveCount int
+		expectErrIs         error // Optional
 	}{
 		{
-			name:                                "NoOp_ScaleToSameCount",
-			initialShardCount:                   2,
-			targetShardCount:                    2,
-			expectedActiveCount:                 2,
-			expectedPartitionedGlobalCapacities: map[uint64]int{50: 2},
-			expectedPartitionedBandCapacities:   map[uint64]int{25: 2},
+			name:                "NoOp_ScaleToSameCount",
+			initialShardCount:   2,
+			targetShardCount:    2,
+			expectedActiveCount: 2,
 		},
 		{
-			name:                                "Succeeds_ScaleUp_FromOne",
-			initialShardCount:                   1,
-			targetShardCount:                    4,
-			expectedActiveCount:                 4,
-			expectedPartitionedGlobalCapacities: map[uint64]int{25: 4},
-			expectedPartitionedBandCapacities:   map[uint64]int{12: 2, 13: 2},
+			name:                "Succeeds_ScaleUp_FromOne",
+			initialShardCount:   1,
+			targetShardCount:    4,
+			expectedActiveCount: 4,
 		},
 		{
-			name:                                "Succeeds_ScaleDown_ToOne",
-			initialShardCount:                   3,
-			targetShardCount:                    1,
-			expectedActiveCount:                 1,
-			expectedPartitionedGlobalCapacities: map[uint64]int{100: 1},
-			expectedPartitionedBandCapacities:   map[uint64]int{50: 1},
+			name:                "Succeeds_ScaleDown_ToOne",
+			initialShardCount:   3,
+			targetShardCount:    1,
+			expectedActiveCount: 1,
 		},
 		{
-			name:                                "Error_ScaleDown_ToZero",
-			initialShardCount:                   2,
-			targetShardCount:                    0,
-			expectedActiveCount:                 2,
-			expectErrIs:                         contracts.ErrInvalidShardCount,
-			expectedPartitionedGlobalCapacities: map[uint64]int{50: 2},
-			expectedPartitionedBandCapacities:   map[uint64]int{25: 2},
+			name:                "Error_ScaleDown_ToZero",
+			initialShardCount:   2,
+			targetShardCount:    0,
+			expectedActiveCount: 2,
+			expectErrIs:         contracts.ErrInvalidShardCount,
 		},
 		{
-			name:                                "Error_ScaleDown_ToNegative",
-			initialShardCount:                   1,
-			targetShardCount:                    -1,
-			expectedActiveCount:                 1,
-			expectErrIs:                         contracts.ErrInvalidShardCount,
-			expectedPartitionedGlobalCapacities: map[uint64]int{100: 1},
-			expectedPartitionedBandCapacities:   map[uint64]int{50: 1},
+			name:                "Error_ScaleDown_ToNegative",
+			initialShardCount:   1,
+			targetShardCount:    -1,
+			expectedActiveCount: 1,
+			expectErrIs:         contracts.ErrInvalidShardCount,
 		},
 	}
 
@@ -488,16 +429,10 @@ func TestFlowRegistry_UpdateShardCount(t *testing.T) {
 				require.NoError(t, err, "UpdateShardCount should not have returned an error")
 			}
 
-			globalCapacities := make(map[uint64]int)
-			bandCapacities := make(map[uint64]int)
-
 			h.fr.mu.RLock()
 			finalActiveCount := len(h.fr.activeShards)
 			finalDrainingCount := len(h.fr.drainingShards)
 			for _, shard := range h.fr.activeShards {
-				stats := shard.Stats()
-				globalCapacities[stats.TotalCapacityBytes]++
-				bandCapacities[stats.PerPriorityBandStats[highPriority].CapacityBytes]++
 				h.assertFlowExists(key, "Shard %s should contain the existing flow", shard.ID())
 			}
 			h.fr.mu.RUnlock()
@@ -508,9 +443,32 @@ func TestFlowRegistry_UpdateShardCount(t *testing.T) {
 			}
 			assert.Equal(t, tc.expectedActiveCount, finalActiveCount, "Final active shard count is incorrect")
 			assert.Equal(t, expectedDrainingCount, finalDrainingCount, "Final draining shard count in registry is incorrect")
-			assert.Equal(t, tc.expectedPartitionedGlobalCapacities, globalCapacities,
-				"Global capacity re-partitioning incorrect")
-			assert.Equal(t, tc.expectedPartitionedBandCapacities, bandCapacities, "Band capacity re-partitioning incorrect")
+
+			// Prove capacity partitioning (Black-Box Probing)
+			if finalActiveCount > 0 {
+				shard := h.fr.activeShards[0]
+				mq, err := shard.ManagedQueue(key)
+				require.NoError(t, err)
+
+				expectedShardCapacity := uint64(bandCapacity / finalActiveCount)
+				itemSize := uint64(10)
+				maxItems := expectedShardCapacity / itemSize
+
+				var addedItems []flowcontrol.QueueItemHandle
+				for i := range maxItems {
+					item := mocks.NewMockQueueItemAccessor(itemSize, fmt.Sprintf("req-%d", i), key)
+					require.True(t, shard.HasCapacity(key.Priority, itemSize), "Shard must report capacity for items within its partition limit")
+					err := mq.Add(item)
+					require.NoError(t, err)
+					addedItems = append(addedItems, item.Handle())
+				}
+
+				require.False(t, shard.HasCapacity(key.Priority, itemSize), "Shard must report no capacity for items exceeding its partition limit")
+
+				for _, h := range addedItems {
+					_, _ = mq.Remove(h)
+				}
+			}
 		})
 	}
 }
@@ -528,7 +486,7 @@ func TestFlowRegistry_DynamicProvisioning(t *testing.T) {
 		key := flowcontrol.FlowKey{ID: "dynamic-flow", Priority: dynamicPrio}
 
 		// Connect with a new priority.
-		err := h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error {
+		err := h.fr.WithConnection(key, func() error {
 			return nil
 		})
 		require.NoError(t, err, "WithConnection should succeed for dynamic priority")
@@ -537,10 +495,6 @@ func TestFlowRegistry_DynamicProvisioning(t *testing.T) {
 		_, existsInConfig := h.fr.config.PriorityBands[dynamicPrio]
 		h.fr.mu.RUnlock()
 		assert.True(t, existsInConfig, "Dynamic priority must be added to global config definition")
-
-		stats := h.fr.Stats()
-		_, existsInStats := stats.PerPriorityBandStats[dynamicPrio]
-		assert.True(t, existsInStats, "Dynamic priority must appear in global stats")
 
 		for _, shard := range h.fr.activeShards {
 			_, err := shard.ManagedQueue(key)
@@ -562,7 +516,7 @@ func TestFlowRegistry_DynamicProvisioning(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				// Everyone tries to trigger provisioning simultaneously.
-				_ = h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error { return nil })
+				_ = h.fr.WithConnection(key, func() error { return nil })
 			}()
 		}
 		wg.Wait()
@@ -617,7 +571,7 @@ func TestFlowRegistry_Concurrency(t *testing.T) {
 		for range numGoroutines {
 			go func() {
 				defer wg.Done()
-				err := h.fr.WithConnection(key, func(contracts.ActiveFlowConnection) error {
+				err := h.fr.WithConnection(key, func() error {
 					// Do a small amount of work inside the connection.
 					time.Sleep(1 * time.Millisecond)
 					return nil
@@ -647,16 +601,14 @@ func TestFlowRegistry_Concurrency(t *testing.T) {
 		stopCh := make(chan struct{})
 
 		// Routine 1: The "User" - Constantly tries to connect.
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stopCh:
 					return
 				default:
 					// This triggers the optimistic loop.
-					err := h.fr.WithConnection(key, func(c contracts.ActiveFlowConnection) error {
+					err := h.fr.WithConnection(key, func() error {
 						return nil
 					})
 					if err != nil {
@@ -664,12 +616,10 @@ func TestFlowRegistry_Concurrency(t *testing.T) {
 					}
 				}
 			}
-		}()
+		})
 
 		// Routine 2: The "GC" - Constantly deletes the flow.
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stopCh:
@@ -680,7 +630,7 @@ func TestFlowRegistry_Concurrency(t *testing.T) {
 					time.Sleep(100 * time.Microsecond) // Yield briefly to let Routine 1 make progress
 				}
 			}
-		}()
+		})
 
 		// Let the chaos run for a bit.
 		time.Sleep(100 * time.Millisecond)
@@ -708,24 +658,12 @@ func TestFlowRegistry_Concurrency(t *testing.T) {
 		originalState.markedForDeletion = true
 		originalState.mu.Unlock()
 
-		// Launch a background routine to simulate the GC completing the deletion.
-		// Without this, the main thread would spin forever in pinActiveFlow reloading the same doomed object.
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Yield to allow the main thread to enter the retry loop and hit the "poisoned" check at least once.
-			time.Sleep(10 * time.Millisecond)
-			h.fr.flowStates.Delete(key)
-		}()
-
 		// Attempt to connect.
-		// It should spin briefly, detect the deletion, create a new flow, and succeed.
-		err := h.fr.WithConnection(key, func(c contracts.ActiveFlowConnection) error {
+		// It will detect the deletion, proactively remove it, create a new flow, and succeed.
+		err := h.fr.WithConnection(key, func() error {
 			return nil
 		})
 		require.NoError(t, err, "WithConnection should recover and succeed")
-		wg.Wait()
 
 		// Verification: Ensure we are using a fresh object, not the resurrected corpse.
 		newVal, ok := h.fr.flowStates.Load(key)
@@ -752,7 +690,7 @@ func TestFlowRegistry_Concurrency(t *testing.T) {
 				defer wg.Done()
 				for j := range opsPerWorker {
 					key := flowcontrol.FlowKey{ID: fmt.Sprintf("flow-%d-%d", workerID, j), Priority: highPriority}
-					_ = h.fr.WithConnection(key, func(contracts.ActiveFlowConnection) error { return nil })
+					_ = h.fr.WithConnection(key, func() error { return nil })
 				}
 			}()
 		}
@@ -802,7 +740,7 @@ func TestFlowRegistry_Concurrency(t *testing.T) {
 						ID:       fmt.Sprintf("flow-%d-%d", i, j),
 						Priority: priority,
 					}
-					_ = h.fr.WithConnection(key, func(contracts.ActiveFlowConnection) error {
+					_ = h.fr.WithConnection(key, func() error {
 						time.Sleep(1 * time.Millisecond)
 						return nil
 					})
@@ -831,7 +769,7 @@ func TestFlowRegistry_Concurrency(t *testing.T) {
 		// GC Worker: Constantly running GC cycles
 		go func() {
 			defer wg.Done()
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				h.fakeClock.Step(h.config.FlowGCTimeout + time.Second)
 				h.fr.executeGCCycle()
 				time.Sleep(5 * time.Millisecond)
@@ -866,9 +804,7 @@ func TestFlowRegistry_deletePriorityBand(t *testing.T) {
 		require.True(t, exists, "Dynamic band should exist in registry config")
 
 		// Verify band exists in all shards
-		h.fr.mu.RLock()
-		shards := h.fr.allShards
-		h.fr.mu.RUnlock()
+		shards := *h.fr.allShards.Load()
 
 		for i, shard := range shards {
 			_, ok := shard.priorityBands.Load(dynamicPrio)
@@ -904,9 +840,7 @@ func TestFlowRegistry_deletePriorityBand(t *testing.T) {
 			assert.False(t, ok, "Band should be removed from shard %d config", i)
 
 			// Verify removed from ordered list
-			shard.mu.RLock()
-			orderedList := shard.orderedPriorityLevels
-			shard.mu.RUnlock()
+			orderedList := *shard.orderedPriorityLevels.Load()
 			for _, p := range orderedList {
 				assert.NotEqual(t, dynamicPrio, p, "Band priority should be removed from ordered list in shard %d", i)
 			}
@@ -1062,9 +996,7 @@ func TestFlowRegistry_PriorityBandGarbageCollection(t *testing.T) {
 		h.openConnectionOnFlow(key)
 
 		// Verify band exists on all shards
-		h.fr.mu.RLock()
-		shards := h.fr.allShards
-		h.fr.mu.RUnlock()
+		shards := *h.fr.allShards.Load()
 		require.Len(t, shards, 3, "Should have 3 shards")
 
 		for i, shard := range shards {
@@ -1163,7 +1095,7 @@ func TestFlowRegistry_PriorityBandGarbageCollection(t *testing.T) {
 		h.fr.mu.Unlock()
 
 		// Attempt to open connection - JIT should fail during buildFlowComponents
-		err = h.fr.WithConnection(key, func(conn contracts.ActiveFlowConnection) error {
+		err = h.fr.WithConnection(key, func() error {
 			t.Fatal("Should not reach callback when JIT fails")
 			return nil
 		})
@@ -1430,7 +1362,7 @@ func TestFlowRegistry_JITErrorScoping(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			err := registry.WithConnection(key, func(conn contracts.ActiveFlowConnection) error {
+			err := registry.WithConnection(key, func() error {
 				return nil
 			})
 			if err == nil {

@@ -17,7 +17,6 @@ limitations under the License.
 package registry
 
 import (
-	"runtime"
 	"sync"
 	"time"
 
@@ -161,9 +160,9 @@ func pinLeasedResource[K any, V interface {
 			return state, isNew
 		}
 
-		// The GC has marked this resource for deletion. Back off and allow it to die.
-		// We yield the processor to allow the GC goroutine to run and complete LoadAndDelete.
-		runtime.Gosched()
+		// The GC has marked this resource for deletion. Proactively delete it ourselves rather
+		// than spinning and waiting for the GC thread to perform the LoadAndDelete.
+		m.LoadAndDelete(key)
 		continue
 	}
 }

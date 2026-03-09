@@ -32,6 +32,7 @@ package mocks
 import (
 	"context"
 	"fmt"
+	"iter"
 	"sync"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/backend/metrics"
@@ -50,9 +51,9 @@ type MockRegistryShard struct {
 	IsActiveFunc                 func() bool
 	ManagedQueueFunc             func(key flowcontrol.FlowKey) (contracts.ManagedQueue, error)
 	FairnessPolicyFunc           func(priority int) (flowcontrol.FairnessPolicy, error)
-	PriorityBandAccessorFunc     func(priority int) (flowcontrol.PriorityBandAccessor, error)
-	AllOrderedPriorityLevelsFunc func() []int
-	StatsFunc                    func() contracts.ShardStats
+	PriorityBandStateFunc        func(priority int) (any, iter.Seq[flowcontrol.FlowQueueAccessor], error)
+	AllOrderedPriorityLevelsFunc func() iter.Seq[int]
+	HasCapacityFunc              func(priority int, itemByteSize uint64) bool
 }
 
 func (m *MockRegistryShard) ID() string {
@@ -83,25 +84,26 @@ func (m *MockRegistryShard) FairnessPolicy(priority int) (flowcontrol.FairnessPo
 	return nil, nil
 }
 
-func (m *MockRegistryShard) PriorityBandAccessor(priority int) (flowcontrol.PriorityBandAccessor, error) {
-	if m.PriorityBandAccessorFunc != nil {
-		return m.PriorityBandAccessorFunc(priority)
+func (m *MockRegistryShard) PriorityBandState(priority int) (any, iter.Seq[flowcontrol.FlowQueueAccessor], error) {
+	if m.PriorityBandStateFunc != nil {
+		return m.PriorityBandStateFunc(priority)
 	}
-	return nil, nil
+	return nil, nil, nil
 }
 
-func (m *MockRegistryShard) AllOrderedPriorityLevels() []int {
+func (m *MockRegistryShard) AllOrderedPriorityLevels() iter.Seq[int] {
 	if m.AllOrderedPriorityLevelsFunc != nil {
 		return m.AllOrderedPriorityLevelsFunc()
 	}
 	return nil
 }
 
-func (m *MockRegistryShard) Stats() contracts.ShardStats {
-	if m.StatsFunc != nil {
-		return m.StatsFunc()
+func (m *MockRegistryShard) HasCapacity(priority int, itemByteSize uint64) bool {
+	if m.HasCapacityFunc != nil {
+		return m.HasCapacityFunc(priority, itemByteSize)
 	}
-	return contracts.ShardStats{}
+	// By default, a mock has capacity to avoid test failures.
+	return true
 }
 
 var _ contracts.RegistryShard = &MockRegistryShard{}

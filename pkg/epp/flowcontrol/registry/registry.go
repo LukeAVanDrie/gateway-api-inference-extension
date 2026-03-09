@@ -20,6 +20,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"iter"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -108,8 +109,10 @@ type FlowRegistry struct {
 	mu             sync.RWMutex
 	activeShards   []*registryShard
 	drainingShards map[string]*registryShard
-	allShards      []*registryShard // Cached, sorted combination of Active and Draining shards
-	nextShardID    uint64
+	// atomic caches of the shard lists for lock-free iteration on hot paths.
+	activeShardsAtomic atomic.Pointer[[]*registryShard]
+	allShards          atomic.Pointer[[]*registryShard]
+	nextShardID        uint64
 }
 
 var _ contracts.FlowRegistry = &FlowRegistry{}
@@ -136,6 +139,10 @@ func NewFlowRegistry(config *Config, logger logr.Logger, opts ...RegistryOption)
 		activeShards:   []*registryShard{},
 		drainingShards: make(map[string]*registryShard),
 	}
+	// Initialize atomic caches
+	emptyShards := make([]*registryShard, 0)
+	fr.activeShardsAtomic.Store(&emptyShards)
+	fr.allShards.Store(&emptyShards)
 
 	for _, opt := range opts {
 		opt(fr)
@@ -185,7 +192,7 @@ func (fr *FlowRegistry) Run(ctx context.Context) {
 //
 // When a NEW flow is created, this method also increments the corresponding priority band's lease count,
 // establishing the invariant: bandState.leaseCount = number of active flows at this priority.
-func (fr *FlowRegistry) WithConnection(key flowcontrol.FlowKey, fn func(conn contracts.ActiveFlowConnection) error) error {
+func (fr *FlowRegistry) WithConnection(key flowcontrol.FlowKey, fn func() error) error {
 	if key.ID == "" {
 		return contracts.ErrFlowIDEmpty
 	}
@@ -235,7 +242,7 @@ func (fr *FlowRegistry) WithConnection(key flowcontrol.FlowKey, fn func(conn con
 
 	// 3. Execute callback.
 	// The flow lease is held throughout the execution of fn, preventing GC.
-	return fn(&connection{registry: fr, key: key})
+	return fn()
 }
 
 // ensureFlowInfrastructure guarantees that the Priority Band exists and that the flow's queues are synchronized across
@@ -257,16 +264,14 @@ func (fr *FlowRegistry) ensureFlowInfrastructure(key flowcontrol.FlowKey) error 
 	// Now we know the band exists (or we errored). Re-acquire Read Lock to safely read the topology and build components.
 
 	// 2. Synchronize shards.
-	// Acquire Read Lock to iterate the shard topology safely.
-	fr.mu.RLock()
-	defer fr.mu.RUnlock()
-
-	components, err := fr.buildFlowComponents(key, len(fr.allShards))
+	// We read the lock-free allShards slice so we don't need a lock.
+	shards := *fr.allShards.Load()
+	components, err := fr.buildFlowComponents(key, len(shards))
 	if err != nil {
 		return err
 	}
 
-	for i, shard := range fr.allShards {
+	for i, shard := range shards {
 		shard.synchronizeFlow(key, components[i].policy, components[i].queue)
 	}
 
@@ -314,47 +319,29 @@ func (fr *FlowRegistry) deletePriorityBand(priority int) {
 
 // --- `contracts.FlowRegistryObserver` Implementation ---
 
-// Stats returns globally aggregated statistics for the entire `FlowRegistry`.
-//
-// Statistics are aggregated using high-performance, lock-free atomic updates.
-// The returned stats represent a near-consistent snapshot of the system's state.
-func (fr *FlowRegistry) Stats() contracts.AggregateStats {
-	// Casts from `int64` to `uint64` are safe because the non-negativity invariant is strictly enforced at the
-	// `managedQueue` level.
-	stats := contracts.AggregateStats{
-		TotalCapacityBytes:   fr.config.MaxBytes,
-		TotalByteSize:        uint64(fr.totalByteSize.Load()),
-		TotalLen:             uint64(fr.totalLen.Load()),
-		PerPriorityBandStats: make(map[int]contracts.PriorityBandStats, len(fr.config.PriorityBands)),
-	}
-
-	fr.perPriorityBandStats.Range(func(key, value any) bool {
-		priority := key.(int)
-		bandStats := value.(*bandStats)
-		bandCfg := fr.config.PriorityBands[priority]
-		stats.PerPriorityBandStats[priority] = contracts.PriorityBandStats{
-			Priority:      priority,
-			PriorityName:  bandCfg.PriorityName,
-			CapacityBytes: bandCfg.MaxBytes,
-			ByteSize:      uint64(bandStats.byteSize.Load()),
-			Len:           uint64(bandStats.len.Load()),
+// ActiveShardIDs returns a slice of identifiers for all shards currently considered active.
+func (fr *FlowRegistry) ActiveShardIDs() iter.Seq[string] {
+	return func(yield func(string) bool) {
+		shards := *fr.activeShardsAtomic.Load()
+		for _, s := range shards {
+			if !yield(s.id) {
+				return
+			}
 		}
-		return true
-	})
-	return stats
+	}
 }
 
-// ShardStats returns a slice of statistics, one for each internal shard.
-func (fr *FlowRegistry) ShardStats() []contracts.ShardStats {
-	fr.mu.RLock()
-	allShards := fr.allShards
-	fr.mu.RUnlock()
-
-	shardStats := make([]contracts.ShardStats, len(allShards))
-	for i, s := range allShards {
-		shardStats[i] = s.Stats()
+// ActiveShards returns a zero-allocation iterator over all currently active shards.
+// It uses a lock-free atomic pointer load, preventing reader-writer contention on the global registry mutex.
+func (fr *FlowRegistry) ActiveShards() iter.Seq[contracts.RegistryShard] {
+	return func(yield func(contracts.RegistryShard) bool) {
+		shards := *fr.activeShardsAtomic.Load()
+		for _, s := range shards {
+			if !yield(s) {
+				return
+			}
+		}
 	}
-	return shardStats
 }
 
 // --- Garbage Collection ---
@@ -393,14 +380,11 @@ func (fr *FlowRegistry) gcFlows() {
 
 // cleanupFlowResources removes queue resources from the shards for the specified flows.
 func (fr *FlowRegistry) cleanupFlowResources(keys []flowcontrol.FlowKey) {
-	fr.mu.Lock() // Exclusive lock to prevent race with ensureFlowInfrastructure.
-	defer fr.mu.Unlock()
-
 	for _, key := range keys {
 		if _, exists := fr.flowStates.Load(key); exists {
 			continue // 'Zombie' flow
 		}
-		for _, shard := range fr.allShards {
+		for _, shard := range *fr.allShards.Load() {
 			shard.deleteFlow(key)
 		}
 	}
@@ -443,7 +427,7 @@ func (fr *FlowRegistry) cleanupPriorityBandResources(priorities []int) {
 		fr.perPriorityBandStats.Delete(priority)
 
 		// Delete from all shards (both active and draining)
-		for _, shard := range fr.allShards {
+		for _, shard := range *fr.allShards.Load() {
 			shard.deletePriorityBand(priority)
 		}
 
@@ -521,7 +505,7 @@ func (fr *FlowRegistry) executeScaleUpLocked(newTotalActive int) error {
 	// discarded, leaving the system state clean.
 	allComponents := make(map[flowcontrol.FlowKey][]flowComponents)
 	var rangeErr error
-	fr.flowStates.Range(func(key, _ interface{}) bool {
+	fr.flowStates.Range(func(key, _ any) bool {
 		flowKey := key.(flowcontrol.FlowKey)
 		components, err := fr.buildFlowComponents(flowKey, len(newShards))
 		if err != nil {
@@ -613,6 +597,12 @@ func (fr *FlowRegistry) updateAllShardsCacheLocked() {
 		allShards = append(allShards, shard)
 	}
 
+	// activeShards is already naturally sorted because we append incrementally.
+	// We just copy it for the atomic pointer.
+	activeShardsCopy := make([]*registryShard, len(fr.activeShards))
+	copy(activeShardsCopy, fr.activeShards)
+	fr.activeShardsAtomic.Store(&activeShardsCopy)
+
 	// Sort the combined slice by shard ID.
 	// This provides a stable, deterministic order for all consumers of the shard list, which is critical because map
 	// iteration for `drainingShards` is non-deterministic.
@@ -621,7 +611,7 @@ func (fr *FlowRegistry) updateAllShardsCacheLocked() {
 	slices.SortFunc(allShards, func(a, b *registryShard) int {
 		return cmp.Compare(a.id, b.id)
 	})
-	fr.allShards = allShards
+	fr.allShards.Store(&allShards)
 }
 
 // propagateStatsDelta is the top-level, lock-free aggregator for all statistics.

@@ -330,7 +330,7 @@ func fairnessPolicy(ref string, handle plugin.Handle) (flowcontrol.FairnessPolic
 func WithQueue(name queue.RegisteredQueueName) PriorityBandConfigOption {
 	return func(p *PriorityBandConfig) error {
 		if name == "" {
-			return errors.New("Queue cannot be empty")
+			return errors.New("queue cannot be empty")
 		}
 		p.Queue = name
 		return nil
@@ -552,7 +552,7 @@ func (p *PriorityBandConfig) validate(checker capabilityChecker) error {
 		return fmt.Errorf("FairnessPolicy instance is missing for priority band %d", p.Priority)
 	}
 	if p.Queue == "" {
-		return fmt.Errorf("Queue required for priority band %d", p.Priority)
+		return fmt.Errorf("queue required for priority band %d", p.Priority)
 	}
 	if checker != nil {
 		if err := checker.CheckCompatibility(p.OrderingPolicy, p.Queue); err != nil {

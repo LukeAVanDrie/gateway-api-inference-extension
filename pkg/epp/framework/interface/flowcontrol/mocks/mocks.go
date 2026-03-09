@@ -18,6 +18,7 @@ package mocks
 
 import (
 	"context"
+	"iter"
 	"time"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
@@ -179,47 +180,6 @@ func (m *MockFlowQueueAccessor) PeekTail() flowcontrol.QueueItemAccessor {
 
 var _ flowcontrol.FlowQueueAccessor = &MockFlowQueueAccessor{}
 
-// MockPriorityBandAccessor is a behavioral mock for the PriorityBandAccessor interface.
-// Simple accessors are configured with public value fields (e.g., PriorityV).
-// Complex methods with logic are configured with function fields (e.g., IterateQueuesFunc).
-//
-// Convention: Fields suffixed with 'V' (e.g., PriorityV) are static Value return fields.
-// This avoids collision with the interface method of the same name.
-type MockPriorityBandAccessor struct {
-	PriorityV         int
-	PriorityNameV     string
-	PolicyStateV      any
-	FlowKeysFunc      func() []flowcontrol.FlowKey
-	QueueFunc         func(flowID string) flowcontrol.FlowQueueAccessor
-	IterateQueuesFunc func(callback func(flow flowcontrol.FlowQueueAccessor) (keepIterating bool))
-}
-
-func (m *MockPriorityBandAccessor) Priority() int        { return m.PriorityV }
-func (m *MockPriorityBandAccessor) PriorityName() string { return m.PriorityNameV }
-func (m *MockPriorityBandAccessor) PolicyState() any     { return m.PolicyStateV }
-
-func (m *MockPriorityBandAccessor) FlowKeys() []flowcontrol.FlowKey {
-	if m.FlowKeysFunc != nil {
-		return m.FlowKeysFunc()
-	}
-	return nil
-}
-
-func (m *MockPriorityBandAccessor) Queue(id string) flowcontrol.FlowQueueAccessor {
-	if m.QueueFunc != nil {
-		return m.QueueFunc(id)
-	}
-	return nil
-}
-
-func (m *MockPriorityBandAccessor) IterateQueues(callback func(flow flowcontrol.FlowQueueAccessor) bool) {
-	if m.IterateQueuesFunc != nil {
-		m.IterateQueuesFunc(callback)
-	}
-}
-
-var _ flowcontrol.PriorityBandAccessor = &MockPriorityBandAccessor{}
-
 // MockOrderingPolicy is a behavioral mock for the OrderingPolicy interface.
 // Simple accessors are configured with public value fields (e.g., TypedNameV).
 // Complex methods with logic are configured with function fields (e.g., LessFunc).
@@ -250,7 +210,7 @@ var _ flowcontrol.OrderingPolicy = &MockOrderingPolicy{}
 type MockFairnessPolicy struct {
 	TypedNameV   plugin.TypedName
 	NewStateFunc func(ctx context.Context) any
-	PickFunc     func(ctx context.Context, flowGroup flowcontrol.PriorityBandAccessor) (flowcontrol.FlowQueueAccessor, error)
+	PickFunc     func(ctx context.Context, state any, queues iter.Seq[flowcontrol.FlowQueueAccessor]) (flowcontrol.FlowQueueAccessor, error)
 }
 
 func (m *MockFairnessPolicy) TypedName() plugin.TypedName { return m.TypedNameV }
@@ -262,9 +222,9 @@ func (m *MockFairnessPolicy) NewState(ctx context.Context) any {
 	return nil
 }
 
-func (m *MockFairnessPolicy) Pick(ctx context.Context, flowGroup flowcontrol.PriorityBandAccessor) (flowcontrol.FlowQueueAccessor, error) {
+func (m *MockFairnessPolicy) Pick(ctx context.Context, state any, queues iter.Seq[flowcontrol.FlowQueueAccessor]) (flowcontrol.FlowQueueAccessor, error) {
 	if m.PickFunc != nil {
-		return m.PickFunc(ctx, flowGroup)
+		return m.PickFunc(ctx, state, queues)
 	}
 	return nil, nil
 }

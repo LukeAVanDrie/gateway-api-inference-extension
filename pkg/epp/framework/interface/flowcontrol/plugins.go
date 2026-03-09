@@ -19,6 +19,7 @@ package flowcontrol
 import (
 	"context"
 	"errors"
+	"iter"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
 )
@@ -61,14 +62,13 @@ type FairnessPolicy interface {
 	//   - any: The opaque state object (e.g., &roundRobinCursor{index: 0}).
 	NewState(ctx context.Context) any
 
-	// Pick inspects the active flows in the provided Flow Group (Priority Band) and selects the "winner" for the next
+	// Pick inspects the active flows in the provided iterator and selects the "winner" for the next
 	// dispatch attempt.
 	//
 	// This is the core logic loop. The implementation should:
-	//  1. Retrieve its scoped state from band.GetPolicyState().
-	//  2. Cast the state to its concrete type (e.g., *roundRobinCursor).
-	//  3. Apply its algorithm to select a FlowQueueAccessor.
-	//  4. Update the state (e.g., increment the cursor) if necessary.
+	//  1. Cast the state to its concrete type (e.g., *roundRobinCursor).
+	//  2. Apply its algorithm to select a FlowQueueAccessor.
+	//  3. Update the state (e.g., increment the cursor) if necessary.
 	//
 	// State may also be updated out-of-band (e.g., from monitoring a metrics server, from integrating with request
 	// lifeycle hooks, etc.).
@@ -77,7 +77,7 @@ type FairnessPolicy interface {
 	//   - flow: The Flow to service next. Returns nil if no valid candidate is found (e.g., all queues empty).
 	//   - err: Only returned for unrecoverable internal errors. Policies should generally return (nil, nil) if simply
 	//     nothing is eligible.
-	Pick(ctx context.Context, flowGroup PriorityBandAccessor) (flow FlowQueueAccessor, err error)
+	Pick(ctx context.Context, state any, queues iter.Seq[FlowQueueAccessor]) (flow FlowQueueAccessor, err error)
 }
 
 // OrderingPolicy governs the strict sequence of service within a single Flow.

@@ -66,6 +66,9 @@ type managedQueue struct {
 	// work when the shard is being decommissioned.
 	isDraining func() bool
 
+	// accessor is a pre-allocated proxy used to expose read-only methods safely without allocations.
+	accessor flowQueueAccessor
+
 	// --- State Protected by `mu` ---
 
 	// mu protects all mutating operations. It ensures that any changes to the underlying `queue` and the updates to the
@@ -99,7 +102,7 @@ func newManagedQueue(
 		"flowKey", key,
 		"queueType", queue.Name(),
 	)
-	return &managedQueue{
+	mq := &managedQueue{
 		queue:        queue,
 		policy:       policy,
 		key:          key,
@@ -107,11 +110,13 @@ func newManagedQueue(
 		logger:       mqLogger,
 		isDraining:   isDraining,
 	}
+	mq.accessor = flowQueueAccessor{mq: mq}
+	return mq
 }
 
 // FlowQueueAccessor returns a read-only, flow-aware view of this queue.
 func (mq *managedQueue) FlowQueueAccessor() flowcontrol.FlowQueueAccessor {
-	return &flowQueueAccessor{mq: mq}
+	return &mq.accessor
 }
 
 // Add performs an atomic check on the parent shard's lifecycle state before adding the item to the underlying queue.

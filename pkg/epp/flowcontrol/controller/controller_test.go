@@ -26,6 +26,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -180,47 +182,44 @@ func newIntegrationHarness(t *testing.T, ctx context.Context, cfg *Config, regis
 	return h
 }
 
-// mockActiveFlowConnection is a local mock for the `contracts.ActiveFlowConnection` interface.
-type mockActiveFlowConnection struct {
-	ActiveShardsV    []contracts.RegistryShard
-	ActiveShardsFunc func() []contracts.RegistryShard
-	FlowKeyV         flowcontrol.FlowKey
-}
-
-func (m *mockActiveFlowConnection) ActiveShards() []contracts.RegistryShard {
-	if m.ActiveShardsFunc != nil {
-		return m.ActiveShardsFunc()
-	}
-	return m.ActiveShardsV
-}
-
-func (m *mockActiveFlowConnection) FlowKey() flowcontrol.FlowKey {
-	return m.FlowKeyV
-}
-
 // mockRegistryClient is a mock for the private `registryClient` interface.
 type mockRegistryClient struct {
 	contracts.FlowRegistryObserver
 	contracts.FlowRegistryDataPlane
-	WithConnectionFunc func(key flowcontrol.FlowKey, fn func(conn contracts.ActiveFlowConnection) error) error
-	ShardStatsFunc     func() []contracts.ShardStats
+	WithConnectionFunc func(key flowcontrol.FlowKey, fn func() error) error
+	ActiveShardIDsFunc func() []string
+	ActiveShardsFunc   func() iter.Seq[contracts.RegistryShard]
 }
 
 func (m *mockRegistryClient) WithConnection(
 	key flowcontrol.FlowKey,
-	fn func(conn contracts.ActiveFlowConnection) error,
+	fn func() error,
 ) error {
 	if m.WithConnectionFunc != nil {
 		return m.WithConnectionFunc(key, fn)
 	}
-	return fn(&mockActiveFlowConnection{})
+	return fn()
 }
 
-func (m *mockRegistryClient) ShardStats() []contracts.ShardStats {
-	if m.ShardStatsFunc != nil {
-		return m.ShardStatsFunc()
+func (m *mockRegistryClient) ActiveShards() iter.Seq[contracts.RegistryShard] {
+	if m.ActiveShardsFunc != nil {
+		return m.ActiveShardsFunc()
 	}
-	return nil
+	return func(yield func(contracts.RegistryShard) bool) {}
+}
+
+func (m *mockRegistryClient) ActiveShardIDs() iter.Seq[string] {
+	return func(yield func(string) bool) {
+		var ids []string
+		if m.ActiveShardIDsFunc != nil {
+			ids = m.ActiveShardIDsFunc()
+		}
+		for _, id := range ids {
+			if !yield(id) {
+				return
+			}
+		}
+	}
 }
 
 // mockShardProcessor is a mock for the internal `shardProcessor` interface.
@@ -355,11 +354,14 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 
 			// Configure registry to return a shard.
 			shardA := newMockShard("shard-A").build()
-			h.mockRegistry.WithConnectionFunc = func(key flowcontrol.FlowKey, fn func(_ contracts.ActiveFlowConnection) error) error {
-				return fn(&mockActiveFlowConnection{
-					ActiveShardsV: []contracts.RegistryShard{shardA},
-					FlowKeyV:      key,
-				})
+			h.mockRegistry.ActiveShardsFunc = func() iter.Seq[contracts.RegistryShard] {
+				return func(yield func(contracts.RegistryShard) bool) {
+					for _, s := range []contracts.RegistryShard{shardA} {
+						if !yield(s) {
+							return
+						}
+					}
+				}
 			}
 			// Configure processor to block until context expiry.
 			h.mockProcessorFactory.processors["shard-A"] = &mockShardProcessor{
@@ -427,7 +429,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			// Configure the registry to fail when attempting to retrieve ActiveFlowConnection.
 			mockRegistry.WithConnectionFunc = func(
 				_ flowcontrol.FlowKey,
-				_ func(conn contracts.ActiveFlowConnection) error,
+				_ func() error,
 			) error {
 				return expectedErr
 			}
@@ -454,14 +456,10 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 					return nil, errors.New("invariant violation: queue retrieval failed")
 				},
 			}
-			mockRegistry.WithConnectionFunc = func(
-				key flowcontrol.FlowKey,
-				fn func(conn contracts.ActiveFlowConnection) error,
-			) error {
-				return fn(&mockActiveFlowConnection{
-					ActiveShardsV: []contracts.RegistryShard{faultyShard},
-					FlowKeyV:      key,
-				})
+			mockRegistry.ActiveShardsFunc = func() iter.Seq[contracts.RegistryShard] {
+				return func(yield func(contracts.RegistryShard) bool) {
+					yield(faultyShard)
+				}
 			}
 
 			req := newTestRequest(defaultFlowKey)
@@ -490,6 +488,7 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			expectedOutcome types.QueueOutcome
 			expectErr       bool
 			expectErrIs     error
+			opts            []unitHarnessOption
 		}{
 			{
 				name:   "SubmitSucceeds_NonBlocking_WithSingleActiveShard",
@@ -574,6 +573,9 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 				expectErr:       true,
 				// The error must reflect the specific cause of the context cancellation (ErrTTLExpired).
 				expectErrIs: types.ErrTTLExpired,
+				// Use a real clock because this test enforces a real-time `context.WithDeadline`
+				// that can falsely expire instantly if FakeClock's time drifts from System time under load.
+				opts: []unitHarnessOption{withHarnessClock(clock.RealClock{})},
 			},
 			{
 				name:   "Rejects_OnProcessorShutdownDuringSubmit",
@@ -617,21 +619,24 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 				mockRegistry := &mockRegistryClient{}
 
 				// Configure the harness with the appropriate TTL.
-				harnessConfig := &Config{DefaultRequestTTL: defaultTestTTL}
+				harnessConfig := &Config{
+					DefaultRequestTTL:               defaultTestTTL,
+					ProcessorReconciliationInterval: 1 * time.Second, // Prevent time.NewTicker(0) panic with RealClock
+				}
 				if tc.requestTTL > 0 {
 					harnessConfig.DefaultRequestTTL = tc.requestTTL
 				}
-				h := newUnitHarness(t, t.Context(), harnessConfig, mockRegistry)
+				h := newUnitHarness(t, t.Context(), harnessConfig, mockRegistry, tc.opts...)
 
 				// Configure the registry to return the specified shards.
-				mockRegistry.WithConnectionFunc = func(
-					key flowcontrol.FlowKey,
-					fn func(conn contracts.ActiveFlowConnection) error,
-				) error {
-					return fn(&mockActiveFlowConnection{
-						ActiveShardsV: tc.shards,
-						FlowKeyV:      key,
-					})
+				mockRegistry.ActiveShardsFunc = func() iter.Seq[contracts.RegistryShard] {
+					return func(yield func(contracts.RegistryShard) bool) {
+						for _, s := range tc.shards {
+							if !yield(s) {
+								return
+							}
+						}
+					}
 				}
 				tc.setupProcessors(t, h)
 
@@ -675,14 +680,10 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 		t.Run("Rejects_OnRequestContextCancelledWhileBlocking", func(t *testing.T) {
 			t.Parallel()
 			mockRegistry := &mockRegistryClient{
-				WithConnectionFunc: func(
-					key flowcontrol.FlowKey,
-					fn func(conn contracts.ActiveFlowConnection,
-					) error) error {
-					return fn(&mockActiveFlowConnection{
-						ActiveShardsV: []contracts.RegistryShard{newMockShard("shard-A").build()},
-						FlowKeyV:      key,
-					})
+				ActiveShardsFunc: func() iter.Seq[contracts.RegistryShard] {
+					return func(yield func(contracts.RegistryShard) bool) {
+						yield(newMockShard("shard-A").build())
+					}
 				},
 			}
 			// Use a long TTL to ensure the failure is due to cancellation, not timeout.
@@ -717,27 +718,29 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			t.Parallel()
 			var callCount atomic.Int32
 			mockRegistry := &mockRegistryClient{
-				WithConnectionFunc: func(
-					key flowcontrol.FlowKey,
-					fn func(conn contracts.ActiveFlowConnection) error,
-				) error {
+				ActiveShardsFunc: func() iter.Seq[contracts.RegistryShard] {
 					shardA := newMockShard("shard-A").withByteSize(100).build()
 					shardB := newMockShard("shard-B").withByteSize(1000).build()
 
-					// We construct the connection once, using a hook for dynamic topology.
-					conn := &mockActiveFlowConnection{
-						FlowKeyV: key,
-						ActiveShardsFunc: func() []contracts.RegistryShard {
-							attempt := callCount.Add(1)
-							if attempt == 1 {
-								// Attempt 1: Shard A is present and will be selected (least loaded).
-								return []contracts.RegistryShard{shardA, shardB}
+					attempt := callCount.Add(1)
+					return func(yield func(contracts.RegistryShard) bool) {
+						if attempt == 1 {
+							// Attempt 1: Shard A is present and will be selected (least loaded).
+							if !yield(shardA) {
+								return
 							}
-							// Attempt 2 (Retry): Assume Shard A is now draining and removed from the active set by the registry.
-							return []contracts.RegistryShard{shardB}
-						},
+							yield(shardB)
+							return
+						}
+						// Attempt 2 (Retry): Assume Shard A is now draining and removed from the active set by the registry.
+						yield(shardB)
 					}
-					return fn(conn)
+				},
+				WithConnectionFunc: func(
+					key flowcontrol.FlowKey,
+					fn func() error,
+				) error {
+					return fn()
 				},
 			}
 			// Use a long TTL to ensure retries don't time out.
@@ -783,11 +786,14 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			h := newUnitHarness(t, t.Context(), &Config{DefaultRequestTTL: 10 * time.Second}, nil)
 
 			shardA := newMockShard("shard-A").build()
-			h.mockRegistry.WithConnectionFunc = func(key flowcontrol.FlowKey, fn func(_ contracts.ActiveFlowConnection) error) error {
-				return fn(&mockActiveFlowConnection{
-					ActiveShardsV: []contracts.RegistryShard{shardA},
-					FlowKeyV:      key,
-				})
+			h.mockRegistry.ActiveShardsFunc = func() iter.Seq[contracts.RegistryShard] {
+				return func(yield func(contracts.RegistryShard) bool) {
+					for _, s := range []contracts.RegistryShard{shardA} {
+						if !yield(s) {
+							return
+						}
+					}
+				}
 			}
 
 			// Channel for synchronization.
@@ -861,11 +867,14 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 			}, nil, withHarnessClock(clock.RealClock{}))
 
 			shardA := newMockShard("shard-A").build()
-			h.mockRegistry.WithConnectionFunc = func(key flowcontrol.FlowKey, fn func(_ contracts.ActiveFlowConnection) error) error {
-				return fn(&mockActiveFlowConnection{
-					ActiveShardsV: []contracts.RegistryShard{shardA},
-					FlowKeyV:      key,
-				})
+			h.mockRegistry.ActiveShardsFunc = func() iter.Seq[contracts.RegistryShard] {
+				return func(yield func(contracts.RegistryShard) bool) {
+					for _, s := range []contracts.RegistryShard{shardA} {
+						if !yield(s) {
+							return
+						}
+					}
+				}
 			}
 
 			itemSubmitted := make(chan *internal.FlowItem, 1)
@@ -940,16 +949,13 @@ func TestFlowController_EnqueueAndWait(t *testing.T) {
 
 			// 1. Setup Registry: Trace when the lease is released.
 			mockRegistry := &mockRegistryClient{
-				WithConnectionFunc: func(
-					key flowcontrol.FlowKey,
-					fn func(conn contracts.ActiveFlowConnection) error,
-				) error {
-					// Execute the controller's logic.
-					err := fn(&mockActiveFlowConnection{
-						ActiveShardsV: []contracts.RegistryShard{newMockShard("shard-A").build()},
-						FlowKeyV:      key,
-					})
-					// Signal that the closure has finished and the lease is about to be released.
+				ActiveShardsFunc: func() iter.Seq[contracts.RegistryShard] {
+					return func(yield func(contracts.RegistryShard) bool) {
+						yield(newMockShard("shard-A").build())
+					}
+				},
+				WithConnectionFunc: func(key flowcontrol.FlowKey, fn func() error) error {
+					err := fn()
 					close(leaseReleased)
 					return err
 				},
@@ -1023,9 +1029,9 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 
 		// Setup: A registry that initially knows about "shard-A" and "stale-shard", but later only reports "shard-A".
 		mockRegistry := &mockRegistryClient{
-			ShardStatsFunc: func() []contracts.ShardStats {
+			ActiveShardIDsFunc: func() []string {
 				// The current state of the world according to the registry.
-				return []contracts.ShardStats{{ID: "shard-A"}}
+				return []string{"shard-A"}
 			}}
 		h := newUnitHarness(t, t.Context(), &Config{}, mockRegistry)
 
@@ -1094,9 +1100,9 @@ func TestFlowController_WorkerManagement(t *testing.T) {
 		const reconciliationInterval = 10 * time.Second
 		mockRegistry := &mockRegistryClient{}
 
-		// Count the number of times the reconciliation logic (which calls ShardStats) runs.
+		// Count the number of times the reconciliation logic (which calls ActiveShardIDs) runs.
 		var reconcileCount atomic.Int32
-		mockRegistry.ShardStatsFunc = func() []contracts.ShardStats {
+		mockRegistry.ActiveShardIDsFunc = func() []string {
 			reconcileCount.Add(1)
 			return nil
 		}
@@ -1253,56 +1259,41 @@ func setupRegistryForConcurrency(t *testing.T, numShards int, flowKey flowcontro
 				return currentQueue, nil
 			},
 			// Configuration required for ShardProcessor initialization and dispatch logic.
-			AllOrderedPriorityLevelsFunc: func() []int { return []int{flowKey.Priority} },
-			PriorityBandAccessorFunc: func(priority int) (flowcontrol.PriorityBandAccessor, error) {
+			AllOrderedPriorityLevelsFunc: func() iter.Seq[int] { return slices.Values([]int{flowKey.Priority}) },
+			PriorityBandStateFunc: func(priority int) (any, iter.Seq[flowcontrol.FlowQueueAccessor], error) {
 				if priority == flowKey.Priority {
-					return &frameworkmocks.MockPriorityBandAccessor{
-						PriorityV: priority,
-						IterateQueuesFunc: func(f func(flowcontrol.FlowQueueAccessor) bool) {
-							f(currentQueue.FlowQueueAccessor())
-						},
+					return priority, func(yield func(flowcontrol.FlowQueueAccessor) bool) {
+						if !yield(currentQueue.FlowQueueAccessor()) {
+							return
+						}
 					}, nil
 				}
-				return nil, fmt.Errorf("unexpected priority %d", priority)
+				return nil, nil, fmt.Errorf("unexpected priority %d", priority)
 			},
 			FairnessPolicyFunc: func(_ int) (flowcontrol.FairnessPolicy, error) {
 				return &frameworkmocks.MockFairnessPolicy{
-					PickFunc: func(_ context.Context, _ flowcontrol.PriorityBandAccessor) (flowcontrol.FlowQueueAccessor, error) {
+					PickFunc: func(_ context.Context, _ any, _ iter.Seq[flowcontrol.FlowQueueAccessor]) (flowcontrol.FlowQueueAccessor, error) {
 						return currentQueue.FlowQueueAccessor(), nil
 					},
 				}, nil
 			},
-			// Configure stats reporting based on the live state of the mock queues.
-			StatsFunc: func() contracts.ShardStats {
-				return contracts.ShardStats{
-					ID:            shardID,
-					TotalLen:      uint64(currentQueue.Len()),
-					TotalByteSize: currentQueue.ByteSize(),
-					PerPriorityBandStats: map[int]contracts.PriorityBandStats{
-						flowKey.Priority: {
-							Len:           uint64(currentQueue.Len()),
-							ByteSize:      currentQueue.ByteSize(),
-							CapacityBytes: 1e9, // Effectively unlimited capacity to ensure dispatch success.
-						},
-					},
-				}
-			},
+			// Note: Stats() has been removed, so we no longer mock StatsFunc.
 		}
 	}
 
 	// Configure the registry connection.
-	mockRegistry.WithConnectionFunc = func(key flowcontrol.FlowKey, fn func(conn contracts.ActiveFlowConnection) error) error {
-		return fn(&mockActiveFlowConnection{
-			ActiveShardsV: shards,
-			FlowKeyV:      key,
-		})
+	mockRegistry.WithConnectionFunc = func(key flowcontrol.FlowKey, fn func() error) error {
+		return fn()
 	}
-	mockRegistry.ShardStatsFunc = func() []contracts.ShardStats {
-		stats := make([]contracts.ShardStats, len(shards))
+	mockRegistry.ActiveShardIDsFunc = func() []string {
+		ids := make([]string, len(shards))
 		for i, shard := range shards {
-			stats[i] = shard.Stats()
+			ids[i] = shard.ID()
 		}
-		return stats
+		return ids
+	}
+	mockRegistry.ActiveShardsFunc = func() iter.Seq[contracts.RegistryShard] {
+		return slices.Values(shards)
 	}
 	return mockRegistry
 }

@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/flowcontrol"
 	fwkplugin "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
@@ -77,9 +78,10 @@ func (p *globalStrict) NewState(_ context.Context) any {
 // as a strict comparison is impossible.
 func (p *globalStrict) Pick(
 	_ context.Context,
-	flowGroup flowcontrol.PriorityBandAccessor,
+	_ any,
+	queues iter.Seq[flowcontrol.FlowQueueAccessor],
 ) (flowcontrol.FlowQueueAccessor, error) {
-	if flowGroup == nil {
+	if queues == nil {
 		return nil, nil
 	}
 
@@ -87,34 +89,33 @@ func (p *globalStrict) Pick(
 	var bestItem flowcontrol.QueueItemAccessor
 	var iterationErr error
 
-	flowGroup.IterateQueues(func(queue flowcontrol.FlowQueueAccessor) (keepIterating bool) {
+	for queue := range queues {
 		if queue == nil || queue.Len() == 0 {
-			return true
+			continue
 		}
 
 		item := queue.PeekHead()
 		if item == nil {
-			return true
+			continue
 		}
 
 		if bestQueue == nil {
 			bestQueue = queue
 			bestItem = item
-			return true
+			continue
 		}
 
 		if queue.OrderingPolicy().TypedName().Type != bestQueue.OrderingPolicy().TypedName().Type {
 			iterationErr = fmt.Errorf("%w: expected %q, got %q", flowcontrol.ErrIncompatiblePriorityType,
 				bestQueue.OrderingPolicy().TypedName().Type, queue.OrderingPolicy().TypedName().Type)
-			return false
+			break
 		}
 
 		if bestQueue.OrderingPolicy().Less(item, bestItem) {
 			bestQueue = queue
 			bestItem = item
 		}
-		return true
-	})
+	}
 
 	if iterationErr != nil {
 		return nil, iterationErr

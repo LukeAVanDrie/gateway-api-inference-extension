@@ -1,0 +1,793 @@
+=== RUN   TestNewConfig
+=== PAUSE TestNewConfig
+=== RUN   TestNewConfigFromAPI
+=== PAUSE TestNewConfigFromAPI
+=== RUN   TestFlowController_EnqueueAndWait
+=== PAUSE TestFlowController_EnqueueAndWait
+=== RUN   TestFlowController_WorkerManagement
+=== PAUSE TestFlowController_WorkerManagement
+=== RUN   TestFlowController_Concurrency_Distribution
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1335: EnqueueAndWait failed unexpectedly under load: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1353: 
+        	Error Trace:	/usr/local/google/home/lukevandrie/Code/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/controller_test.go:1353
+        	Error:      	Not equal: 
+        	            	expected: 200
+        	            	actual  : 0
+        	Test:       	TestFlowController_Concurrency_Distribution
+        	Messages:   	all concurrent requests must be dispatched successfully without errors or data races
+--- FAIL: TestFlowController_Concurrency_Distribution (0.02s)
+=== RUN   TestFlowController_Concurrency_Backpressure
+=== PAUSE TestFlowController_Concurrency_Backpressure
+=== CONT  TestNewConfig
+=== RUN   TestNewConfig/Defaults_ShouldBeApplied_WhenNoOptionsProvided
+=== PAUSE TestNewConfig/Defaults_ShouldBeApplied_WhenNoOptionsProvided
+=== RUN   TestNewConfig/WithDefaultRequestTTL_ShouldUpdateConfig
+=== PAUSE TestNewConfig/WithDefaultRequestTTL_ShouldUpdateConfig
+=== RUN   TestNewConfig/WithAllOptions_ShouldUpdateConfig
+=== PAUSE TestNewConfig/WithAllOptions_ShouldUpdateConfig
+=== RUN   TestNewConfig/NegativeDefaultRequestTTL_ShouldError
+=== CONT  TestNewConfigFromAPI
+=== RUN   TestNewConfigFromAPI/NilConfig_ShouldReturnSystemDefaults
+=== PAUSE TestNewConfigFromAPI/NilConfig_ShouldReturnSystemDefaults
+=== RUN   TestNewConfigFromAPI/ValidConfig_ShouldTranslateFields
+=== CONT  TestFlowController_Concurrency_Backpressure
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-19-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-19-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+=== CONT  TestFlowController_WorkerManagement
+=== RUN   TestFlowController_WorkerManagement/Reconciliation
+=== PAUSE TestFlowController_WorkerManagement/Reconciliation
+=== RUN   TestFlowController_WorkerManagement/Reconciliation_IsTriggeredByTicker
+=== PAUSE TestFlowController_WorkerManagement/Reconciliation_IsTriggeredByTicker
+=== RUN   TestFlowController_WorkerManagement/WorkerCreationRace
+=== PAUSE TestFlowController_WorkerManagement/WorkerCreationRace
+=== CONT  TestFlowController_WorkerManagement/Reconciliation
+=== NAME  TestFlowController_Concurrency_Backpressure
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-0-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-0-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-1-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-1-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-2-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-2-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-3-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-3-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-4-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+=== CONT  TestFlowController_EnqueueAndWait
+=== RUN   TestFlowController_EnqueueAndWait/Rejections
+=== CONT  TestFlowController_WorkerManagement/WorkerCreationRace
+=== CONT  TestFlowController_WorkerManagement/Reconciliation_IsTriggeredByTicker
+=== PAUSE TestNewConfigFromAPI/ValidConfig_ShouldTranslateFields
+=== RUN   TestNewConfigFromAPI/ValidConfig_ShouldTranslateAllExposedFields
+=== NAME  TestFlowController_Concurrency_Backpressure
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-16-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-16-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-13-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-13-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-14-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-14-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-15-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-15-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-10-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+=== RUN   TestFlowController_WorkerManagement/Reconciliation/StaleWorkerIsCancelled
+=== RUN   TestFlowController_WorkerManagement/Reconciliation/ActiveWorkerIsNotCancelled
+=== RUN   TestFlowController_WorkerManagement/Reconciliation/WorkerMapIsUpdated
+=== PAUSE TestNewConfig/NegativeDefaultRequestTTL_ShouldError
+=== RUN   TestNewConfig/InvalidExpiryCleanupInterval_ShouldError
+=== PAUSE TestNewConfigFromAPI/ValidConfig_ShouldTranslateAllExposedFields
+=== RUN   TestNewConfigFromAPI/ExplicitZeroRequestTTL_ShouldBeRespected
+=== PAUSE TestNewConfigFromAPI/ExplicitZeroRequestTTL_ShouldBeRespected
+=== RUN   TestNewConfigFromAPI/InvalidConfig_NegativeRequestTTL_ShouldError
+=== PAUSE TestNewConfigFromAPI/InvalidConfig_NegativeRequestTTL_ShouldError
+=== CONT  TestNewConfigFromAPI/NilConfig_ShouldReturnSystemDefaults
+=== PAUSE TestNewConfig/InvalidExpiryCleanupInterval_ShouldError
+=== CONT  TestNewConfigFromAPI/ValidConfig_ShouldTranslateAllExposedFields
+=== RUN   TestNewConfig/ZeroExpiryCleanupInterval_ShouldError
+=== PAUSE TestNewConfig/ZeroExpiryCleanupInterval_ShouldError
+=== CONT  TestNewConfigFromAPI/InvalidConfig_NegativeRequestTTL_ShouldError
+=== CONT  TestNewConfigFromAPI/ExplicitZeroRequestTTL_ShouldBeRespected
+=== RUN   TestNewConfig/InvalidProcessorReconciliationInterval_ShouldError
+=== PAUSE TestNewConfig/InvalidProcessorReconciliationInterval_ShouldError
+=== RUN   TestNewConfig/InvalidEnqueueChannelBufferSize_ShouldError
+=== PAUSE TestNewConfig/InvalidEnqueueChannelBufferSize_ShouldError
+=== CONT  TestNewConfig/Defaults_ShouldBeApplied_WhenNoOptionsProvided
+=== CONT  TestNewConfigFromAPI/ValidConfig_ShouldTranslateFields
+--- PASS: TestNewConfigFromAPI (0.00s)
+    --- PASS: TestNewConfigFromAPI/NilConfig_ShouldReturnSystemDefaults (0.00s)
+    --- PASS: TestNewConfigFromAPI/ValidConfig_ShouldTranslateAllExposedFields (0.00s)
+    --- PASS: TestNewConfigFromAPI/ExplicitZeroRequestTTL_ShouldBeRespected (0.00s)
+    --- PASS: TestNewConfigFromAPI/InvalidConfig_NegativeRequestTTL_ShouldError (0.00s)
+    --- PASS: TestNewConfigFromAPI/ValidConfig_ShouldTranslateFields (0.00s)
+=== CONT  TestNewConfig/InvalidEnqueueChannelBufferSize_ShouldError
+=== CONT  TestNewConfig/InvalidProcessorReconciliationInterval_ShouldError
+=== CONT  TestNewConfig/ZeroExpiryCleanupInterval_ShouldError
+=== CONT  TestNewConfig/InvalidExpiryCleanupInterval_ShouldError
+=== CONT  TestNewConfig/NegativeDefaultRequestTTL_ShouldError
+=== CONT  TestNewConfig/WithAllOptions_ShouldUpdateConfig
+=== PAUSE TestFlowController_EnqueueAndWait/Rejections
+=== NAME  TestFlowController_Concurrency_Backpressure
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-10-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-5-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-5-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-17-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-17-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-11-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+=== RUN   TestFlowController_EnqueueAndWait/Distribution
+=== CONT  TestNewConfig/WithDefaultRequestTTL_ShouldUpdateConfig
+--- PASS: TestNewConfig (0.00s)
+    --- PASS: TestNewConfig/Defaults_ShouldBeApplied_WhenNoOptionsProvided (0.00s)
+    --- PASS: TestNewConfig/InvalidEnqueueChannelBufferSize_ShouldError (0.00s)
+    --- PASS: TestNewConfig/InvalidProcessorReconciliationInterval_ShouldError (0.00s)
+    --- PASS: TestNewConfig/ZeroExpiryCleanupInterval_ShouldError (0.00s)
+    --- PASS: TestNewConfig/InvalidExpiryCleanupInterval_ShouldError (0.00s)
+    --- PASS: TestNewConfig/NegativeDefaultRequestTTL_ShouldError (0.00s)
+    --- PASS: TestNewConfig/WithAllOptions_ShouldUpdateConfig (0.00s)
+    --- PASS: TestNewConfig/WithDefaultRequestTTL_ShouldUpdateConfig (0.00s)
+=== NAME  TestFlowController_Concurrency_Backpressure
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-11-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+=== PAUSE TestFlowController_EnqueueAndWait/Distribution
+=== RUN   TestFlowController_EnqueueAndWait/Retry
+=== PAUSE TestFlowController_EnqueueAndWait/Retry
+=== RUN   TestFlowController_EnqueueAndWait/Lifecycle
+=== PAUSE TestFlowController_EnqueueAndWait/Lifecycle
+=== CONT  TestFlowController_EnqueueAndWait/Rejections
+=== RUN   TestFlowController_EnqueueAndWait/Rejections/OnReqCtxExpiredBeforeDistribution
+=== PAUSE TestFlowController_EnqueueAndWait/Rejections/OnReqCtxExpiredBeforeDistribution
+=== RUN   TestFlowController_EnqueueAndWait/Rejections/OnControllerShutdown
+=== PAUSE TestFlowController_EnqueueAndWait/Rejections/OnControllerShutdown
+=== RUN   TestFlowController_EnqueueAndWait/Rejections/OnNoShardsAvailable
+=== PAUSE TestFlowController_EnqueueAndWait/Rejections/OnNoShardsAvailable
+=== RUN   TestFlowController_EnqueueAndWait/Rejections/OnRegistryConnectionError
+=== PAUSE TestFlowController_EnqueueAndWait/Rejections/OnRegistryConnectionError
+=== RUN   TestFlowController_EnqueueAndWait/Rejections/OnManagedQueueError
+=== PAUSE TestFlowController_EnqueueAndWait/Rejections/OnManagedQueueError
+=== CONT  TestFlowController_EnqueueAndWait/Rejections/OnReqCtxExpiredBeforeDistribution
+=== CONT  TestFlowController_EnqueueAndWait/Rejections/OnManagedQueueError
+=== NAME  TestFlowController_Concurrency_Backpressure
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-8-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-8-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-7-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-7-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-18-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-18-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-9-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-9-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-4-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-6-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-6-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-12-0: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1404: EnqueueAndWait failed unexpectedly under backpressure for request req-backpressure-12-1: request rejected pre-queue: request not accepted: no viable active shards available for flow test-flow:100
+    controller_test.go:1420: 
+        	Error Trace:	/usr/local/google/home/lukevandrie/Code/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/controller_test.go:1420
+        	Error:      	Not equal: 
+        	            	expected: 40
+        	            	actual  : 0
+        	Test:       	TestFlowController_Concurrency_Backpressure
+        	Messages:   	all concurrent requests should be dispatched successfully even under high contention and zero buffer capacity
+--- FAIL: TestFlowController_Concurrency_Backpressure (0.01s)
+=== CONT  TestFlowController_EnqueueAndWait/Lifecycle
+=== RUN   TestFlowController_EnqueueAndWait/Lifecycle/OnReqCtxCancelledAfterDistribution
+=== PAUSE TestFlowController_EnqueueAndWait/Lifecycle/OnReqCtxCancelledAfterDistribution
+=== RUN   TestFlowController_EnqueueAndWait/Lifecycle/OnReqCtxTimeoutAfterDistribution
+=== PAUSE TestFlowController_EnqueueAndWait/Lifecycle/OnReqCtxTimeoutAfterDistribution
+=== RUN   TestFlowController_EnqueueAndWait/Lifecycle/LeaseHeldDuringQueueing
+=== PAUSE TestFlowController_EnqueueAndWait/Lifecycle/LeaseHeldDuringQueueing
+=== CONT  TestFlowController_EnqueueAndWait/Lifecycle/OnReqCtxCancelledAfterDistribution
+=== CONT  TestFlowController_EnqueueAndWait/Retry
+=== RUN   TestFlowController_EnqueueAndWait/Retry/Rejects_OnRequestContextCancelledWhileBlocking
+=== PAUSE TestFlowController_EnqueueAndWait/Retry/Rejects_OnRequestContextCancelledWhileBlocking
+=== RUN   TestFlowController_EnqueueAndWait/Retry/RetriesAndSucceeds_OnProcessorReportsShardDraining
+=== PAUSE TestFlowController_EnqueueAndWait/Retry/RetriesAndSucceeds_OnProcessorReportsShardDraining
+=== CONT  TestFlowController_EnqueueAndWait/Retry/Rejects_OnRequestContextCancelledWhileBlocking
+=== CONT  TestFlowController_EnqueueAndWait/Distribution
+=== RUN   TestFlowController_EnqueueAndWait/Distribution/SubmitSucceeds_NonBlocking_WithSingleActiveShard
+=== PAUSE TestFlowController_EnqueueAndWait/Distribution/SubmitSucceeds_NonBlocking_WithSingleActiveShard
+=== RUN   TestFlowController_EnqueueAndWait/Distribution/DistributesToLeastLoadedShard_WithMultipleActiveShards
+=== PAUSE TestFlowController_EnqueueAndWait/Distribution/DistributesToLeastLoadedShard_WithMultipleActiveShards
+=== RUN   TestFlowController_EnqueueAndWait/Distribution/SubmitSucceeds_AfterBlocking_WithAllProcessorsBusy
+=== PAUSE TestFlowController_EnqueueAndWait/Distribution/SubmitSucceeds_AfterBlocking_WithAllProcessorsBusy
+=== RUN   TestFlowController_EnqueueAndWait/Distribution/Rejects_AfterBlocking_WhenTTL_Expires
+=== PAUSE TestFlowController_EnqueueAndWait/Distribution/Rejects_AfterBlocking_WhenTTL_Expires
+=== RUN   TestFlowController_EnqueueAndWait/Distribution/Rejects_OnProcessorShutdownDuringSubmit
+=== PAUSE TestFlowController_EnqueueAndWait/Distribution/Rejects_OnProcessorShutdownDuringSubmit
+=== RUN   TestFlowController_EnqueueAndWait/Distribution/Rejects_OnProcessorShutdownDuringSubmitOrBlock
+=== PAUSE TestFlowController_EnqueueAndWait/Distribution/Rejects_OnProcessorShutdownDuringSubmitOrBlock
+=== CONT  TestFlowController_EnqueueAndWait/Distribution/SubmitSucceeds_NonBlocking_WithSingleActiveShard
+=== CONT  TestFlowController_EnqueueAndWait/Lifecycle/LeaseHeldDuringQueueing
+=== CONT  TestFlowController_EnqueueAndWait/Lifecycle/OnReqCtxTimeoutAfterDistribution
+=== CONT  TestFlowController_EnqueueAndWait/Retry/RetriesAndSucceeds_OnProcessorReportsShardDraining
+=== CONT  TestFlowController_EnqueueAndWait/Distribution/Rejects_OnProcessorShutdownDuringSubmitOrBlock
+=== CONT  TestFlowController_EnqueueAndWait/Distribution/Rejects_OnProcessorShutdownDuringSubmit
+=== CONT  TestFlowController_EnqueueAndWait/Distribution/Rejects_AfterBlocking_WhenTTL_Expires
+=== CONT  TestFlowController_EnqueueAndWait/Distribution/SubmitSucceeds_AfterBlocking_WithAllProcessorsBusy
+=== CONT  TestFlowController_EnqueueAndWait/Distribution/DistributesToLeastLoadedShard_WithMultipleActiveShards
+=== CONT  TestFlowController_EnqueueAndWait/Rejections/OnNoShardsAvailable
+=== CONT  TestFlowController_EnqueueAndWait/Rejections/OnRegistryConnectionError
+=== CONT  TestFlowController_EnqueueAndWait/Rejections/OnControllerShutdown
+--- PASS: TestFlowController_WorkerManagement (0.00s)
+    --- PASS: TestFlowController_WorkerManagement/WorkerCreationRace (0.00s)
+    --- PASS: TestFlowController_WorkerManagement/Reconciliation (0.00s)
+        --- PASS: TestFlowController_WorkerManagement/Reconciliation/StaleWorkerIsCancelled (0.00s)
+        --- PASS: TestFlowController_WorkerManagement/Reconciliation/ActiveWorkerIsNotCancelled (0.00s)
+        --- PASS: TestFlowController_WorkerManagement/Reconciliation/WorkerMapIsUpdated (0.00s)
+    --- PASS: TestFlowController_WorkerManagement/Reconciliation_IsTriggeredByTicker (0.03s)
+=== NAME  TestFlowController_EnqueueAndWait/Lifecycle/LeaseHeldDuringQueueing
+    controller_test.go:1009: timed out waiting for lease to release after processing finished
+--- FAIL: TestFlowController_EnqueueAndWait (0.00s)
+    --- PASS: TestFlowController_EnqueueAndWait/Rejections (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Rejections/OnManagedQueueError (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Rejections/OnNoShardsAvailable (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Rejections/OnRegistryConnectionError (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Rejections/OnControllerShutdown (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Rejections/OnReqCtxExpiredBeforeDistribution (0.00s)
+    --- PASS: TestFlowController_EnqueueAndWait/Retry (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Retry/RetriesAndSucceeds_OnProcessorReportsShardDraining (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Retry/Rejects_OnRequestContextCancelledWhileBlocking (0.01s)
+    --- PASS: TestFlowController_EnqueueAndWait/Distribution (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Distribution/SubmitSucceeds_NonBlocking_WithSingleActiveShard (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Distribution/Rejects_OnProcessorShutdownDuringSubmitOrBlock (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Distribution/Rejects_OnProcessorShutdownDuringSubmit (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Distribution/SubmitSucceeds_AfterBlocking_WithAllProcessorsBusy (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Distribution/DistributesToLeastLoadedShard_WithMultipleActiveShards (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Distribution/Rejects_AfterBlocking_WhenTTL_Expires (0.05s)
+    --- FAIL: TestFlowController_EnqueueAndWait/Lifecycle (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Lifecycle/OnReqCtxCancelledAfterDistribution (0.00s)
+        --- PASS: TestFlowController_EnqueueAndWait/Lifecycle/OnReqCtxTimeoutAfterDistribution (0.05s)
+        --- FAIL: TestFlowController_EnqueueAndWait/Lifecycle/LeaseHeldDuringQueueing (1.00s)
+FAIL
+FAIL	sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller	1.172s
+=== RUN   TestFlowItem_New
+=== PAUSE TestFlowItem_New
+=== RUN   TestFlowItem_Handle
+=== PAUSE TestFlowItem_Handle
+=== RUN   TestFlowItem_Finalize_Idempotency
+=== PAUSE TestFlowItem_Finalize_Idempotency
+=== RUN   TestFlowItem_Finalize_InferOutcome
+=== PAUSE TestFlowItem_Finalize_InferOutcome
+=== RUN   TestShardProcessor
+=== PAUSE TestShardProcessor
+=== CONT  TestFlowItem_New
+=== CONT  TestFlowItem_Finalize_InferOutcome
+=== RUN   TestFlowItem_Finalize_InferOutcome/queued_TTL_expired
+=== PAUSE TestFlowItem_Finalize_InferOutcome/queued_TTL_expired
+=== RUN   TestFlowItem_Finalize_InferOutcome/queued_context_cancelled
+=== PAUSE TestFlowItem_Finalize_InferOutcome/queued_context_cancelled
+=== RUN   TestFlowItem_Finalize_InferOutcome/queued_other_error
+=== PAUSE TestFlowItem_Finalize_InferOutcome/queued_other_error
+=== RUN   TestFlowItem_Finalize_InferOutcome/not_queued_TTL_expired
+=== PAUSE TestFlowItem_Finalize_InferOutcome/not_queued_TTL_expired
+=== RUN   TestFlowItem_Finalize_InferOutcome/not_queued_context_cancelled
+=== PAUSE TestFlowItem_Finalize_InferOutcome/not_queued_context_cancelled
+=== RUN   TestFlowItem_Finalize_InferOutcome/nil_cause_queued
+=== PAUSE TestFlowItem_Finalize_InferOutcome/nil_cause_queued
+=== RUN   TestFlowItem_Finalize_InferOutcome/nil_cause_not_queued
+=== PAUSE TestFlowItem_Finalize_InferOutcome/nil_cause_not_queued
+=== CONT  TestFlowItem_Finalize_InferOutcome/queued_TTL_expired
+=== CONT  TestShardProcessor
+=== RUN   TestShardProcessor/Integration
+=== PAUSE TestShardProcessor/Integration
+=== RUN   TestShardProcessor/Unit
+=== PAUSE TestShardProcessor/Unit
+=== RUN   TestShardProcessor/Public_API
+=== PAUSE TestShardProcessor/Public_API
+=== CONT  TestShardProcessor/Integration
+=== RUN   TestShardProcessor/Integration/should_dispatch_item_successfully
+=== PAUSE TestShardProcessor/Integration/should_dispatch_item_successfully
+=== RUN   TestShardProcessor/Integration/should_reject_item_when_at_capacity
+=== PAUSE TestShardProcessor/Integration/should_reject_item_when_at_capacity
+=== RUN   TestShardProcessor/Integration/should_reject_item_on_registry_lookup_failure
+=== PAUSE TestShardProcessor/Integration/should_reject_item_on_registry_lookup_failure
+=== RUN   TestShardProcessor/Integration/should_reject_item_if_enqueued_during_shutdown
+=== PAUSE TestShardProcessor/Integration/should_reject_item_if_enqueued_during_shutdown
+=== RUN   TestShardProcessor/Integration/should_evict_a_queued_item_on_shutdown
+=== PAUSE TestShardProcessor/Integration/should_evict_a_queued_item_on_shutdown
+=== RUN   TestShardProcessor/Integration/should_handle_concurrent_enqueues_and_dispatch_all_items
+=== PAUSE TestShardProcessor/Integration/should_handle_concurrent_enqueues_and_dispatch_all_items
+=== RUN   TestShardProcessor/Integration/should_guarantee_exactly-once_finalization_during_dispatch_vs._expiry_race
+=== PAUSE TestShardProcessor/Integration/should_guarantee_exactly-once_finalization_during_dispatch_vs._expiry_race
+=== RUN   TestShardProcessor/Integration/should_shut_down_cleanly_on_context_cancellation
+=== PAUSE TestShardProcessor/Integration/should_shut_down_cleanly_on_context_cancellation
+=== RUN   TestShardProcessor/Integration/should_not_panic_on_nil_item_from_enqueue_channel
+=== PAUSE TestShardProcessor/Integration/should_not_panic_on_nil_item_from_enqueue_channel
+=== CONT  TestShardProcessor/Integration/should_dispatch_item_successfully
+=== CONT  TestFlowItem_Finalize_InferOutcome/nil_cause_not_queued
+=== CONT  TestFlowItem_Finalize_InferOutcome/nil_cause_queued
+=== CONT  TestFlowItem_Finalize_InferOutcome/not_queued_context_cancelled
+=== CONT  TestFlowItem_Finalize_InferOutcome/not_queued_TTL_expired
+=== CONT  TestFlowItem_Finalize_InferOutcome/queued_other_error
+=== CONT  TestFlowItem_Finalize_InferOutcome/queued_context_cancelled
+--- PASS: TestFlowItem_Finalize_InferOutcome (0.00s)
+    --- PASS: TestFlowItem_Finalize_InferOutcome/queued_TTL_expired (0.00s)
+    --- PASS: TestFlowItem_Finalize_InferOutcome/nil_cause_not_queued (0.00s)
+    --- PASS: TestFlowItem_Finalize_InferOutcome/nil_cause_queued (0.00s)
+    --- PASS: TestFlowItem_Finalize_InferOutcome/not_queued_context_cancelled (0.00s)
+    --- PASS: TestFlowItem_Finalize_InferOutcome/not_queued_TTL_expired (0.00s)
+    --- PASS: TestFlowItem_Finalize_InferOutcome/queued_other_error (0.00s)
+    --- PASS: TestFlowItem_Finalize_InferOutcome/queued_context_cancelled (0.00s)
+=== CONT  TestShardProcessor/Public_API
+=== RUN   TestShardProcessor/Public_API/Submit
+=== PAUSE TestShardProcessor/Public_API/Submit
+=== RUN   TestShardProcessor/Public_API/SubmitOrBlock
+=== PAUSE TestShardProcessor/Public_API/SubmitOrBlock
+=== CONT  TestShardProcessor/Public_API/Submit
+=== RUN   TestShardProcessor/Public_API/Submit/should_return_ErrProcessorBusy_when_channel_is_full
+=== PAUSE TestShardProcessor/Public_API/Submit/should_return_ErrProcessorBusy_when_channel_is_full
+=== RUN   TestShardProcessor/Public_API/Submit/should_return_ErrFlowControllerNotRunning_if_lifecycleCtx_is_cancelled
+=== PAUSE TestShardProcessor/Public_API/Submit/should_return_ErrFlowControllerNotRunning_if_lifecycleCtx_is_cancelled
+=== CONT  TestShardProcessor/Public_API/Submit/should_return_ErrProcessorBusy_when_channel_is_full
+=== CONT  TestShardProcessor/Unit
+=== RUN   TestShardProcessor/Unit/enqueue
+=== PAUSE TestShardProcessor/Unit/enqueue
+=== RUN   TestShardProcessor/Unit/hasCapacity
+=== PAUSE TestShardProcessor/Unit/hasCapacity
+=== RUN   TestShardProcessor/Unit/dispatchCycle
+=== PAUSE TestShardProcessor/Unit/dispatchCycle
+=== RUN   TestShardProcessor/Unit/dispatchItem
+=== PAUSE TestShardProcessor/Unit/dispatchItem
+=== RUN   TestShardProcessor/Unit/cleanup_and_utility_methods
+=== PAUSE TestShardProcessor/Unit/cleanup_and_utility_methods
+=== CONT  TestShardProcessor/Unit/enqueue
+--- PASS: TestFlowItem_New (0.00s)
+=== CONT  TestFlowItem_Finalize_Idempotency
+=== RUN   TestFlowItem_Finalize_Idempotency/Finalize_then_Finalize
+=== PAUSE TestFlowItem_Finalize_Idempotency/Finalize_then_Finalize
+=== RUN   TestFlowItem_Finalize_Idempotency/Finalize_then_FinalizeWithOutcome
+=== PAUSE TestFlowItem_Finalize_Idempotency/Finalize_then_FinalizeWithOutcome
+=== RUN   TestFlowItem_Finalize_Idempotency/FinalizeWithOutcome_then_FinalizeWithOutcome
+=== PAUSE TestFlowItem_Finalize_Idempotency/FinalizeWithOutcome_then_FinalizeWithOutcome
+=== RUN   TestFlowItem_Finalize_Idempotency/FinalizeWithOutcome_then_Finalize
+=== PAUSE TestFlowItem_Finalize_Idempotency/FinalizeWithOutcome_then_Finalize
+=== CONT  TestFlowItem_Finalize_Idempotency/Finalize_then_Finalize
+=== CONT  TestFlowItem_Handle
+--- PASS: TestFlowItem_Handle (0.00s)
+=== CONT  TestFlowItem_Finalize_Idempotency/FinalizeWithOutcome_then_Finalize
+=== CONT  TestFlowItem_Finalize_Idempotency/FinalizeWithOutcome_then_FinalizeWithOutcome
+=== CONT  TestFlowItem_Finalize_Idempotency/Finalize_then_FinalizeWithOutcome
+--- PASS: TestFlowItem_Finalize_Idempotency (0.00s)
+    --- PASS: TestFlowItem_Finalize_Idempotency/Finalize_then_Finalize (0.00s)
+    --- PASS: TestFlowItem_Finalize_Idempotency/FinalizeWithOutcome_then_Finalize (0.00s)
+    --- PASS: TestFlowItem_Finalize_Idempotency/FinalizeWithOutcome_then_FinalizeWithOutcome (0.00s)
+    --- PASS: TestFlowItem_Finalize_Idempotency/Finalize_then_FinalizeWithOutcome (0.00s)
+=== CONT  TestShardProcessor/Integration/should_reject_item_when_at_capacity
+=== CONT  TestShardProcessor/Integration/should_not_panic_on_nil_item_from_enqueue_channel
+=== CONT  TestShardProcessor/Integration/should_shut_down_cleanly_on_context_cancellation
+=== CONT  TestShardProcessor/Integration/should_guarantee_exactly-once_finalization_during_dispatch_vs._expiry_race
+=== CONT  TestShardProcessor/Integration/should_handle_concurrent_enqueues_and_dispatch_all_items
+=== CONT  TestShardProcessor/Integration/should_evict_a_queued_item_on_shutdown
+=== CONT  TestShardProcessor/Integration/should_reject_item_if_enqueued_during_shutdown
+=== CONT  TestShardProcessor/Integration/should_reject_item_on_registry_lookup_failure
+=== CONT  TestShardProcessor/Unit/cleanup_and_utility_methods
+=== RUN   TestShardProcessor/Unit/cleanup_and_utility_methods/should_sweep_externally_finalized_items
+=== PAUSE TestShardProcessor/Unit/cleanup_and_utility_methods/should_sweep_externally_finalized_items
+=== RUN   TestShardProcessor/Unit/cleanup_and_utility_methods/should_not_sweep_items_not_finalized
+=== PAUSE TestShardProcessor/Unit/cleanup_and_utility_methods/should_not_sweep_items_not_finalized
+=== RUN   TestShardProcessor/Unit/cleanup_and_utility_methods/should_evict_all_items_on_shutdown
+=== PAUSE TestShardProcessor/Unit/cleanup_and_utility_methods/should_evict_all_items_on_shutdown
+=== RUN   TestShardProcessor/Unit/cleanup_and_utility_methods/should_handle_registry_errors_gracefully_during_concurrent_processing
+=== PAUSE TestShardProcessor/Unit/cleanup_and_utility_methods/should_handle_registry_errors_gracefully_during_concurrent_processing
+=== RUN   TestShardProcessor/Unit/cleanup_and_utility_methods/should_process_all_queues_sequentially
+=== PAUSE TestShardProcessor/Unit/cleanup_and_utility_methods/should_process_all_queues_sequentially
+=== CONT  TestShardProcessor/Unit/cleanup_and_utility_methods/should_sweep_externally_finalized_items
+=== CONT  TestShardProcessor/Public_API/SubmitOrBlock
+=== RUN   TestShardProcessor/Public_API/SubmitOrBlock/should_block_when_channel_is_full_and_succeed_when_space_becomes_available
+=== PAUSE TestShardProcessor/Public_API/SubmitOrBlock/should_block_when_channel_is_full_and_succeed_when_space_becomes_available
+=== RUN   TestShardProcessor/Public_API/SubmitOrBlock/should_unblock_and_return_context_error_on_cancellation
+=== CONT  TestShardProcessor/Public_API/Submit/should_return_ErrFlowControllerNotRunning_if_lifecycleCtx_is_cancelled
+=== PAUSE TestShardProcessor/Public_API/SubmitOrBlock/should_unblock_and_return_context_error_on_cancellation
+=== RUN   TestShardProcessor/Public_API/SubmitOrBlock/should_reject_immediately_if_shutting_down
+=== PAUSE TestShardProcessor/Public_API/SubmitOrBlock/should_reject_immediately_if_shutting_down
+=== CONT  TestShardProcessor/Unit/hasCapacity
+=== RUN   TestShardProcessor/Unit/hasCapacity/should_allow_zero-size_item_even_if_shard_rejects
+=== PAUSE TestShardProcessor/Unit/hasCapacity/should_allow_zero-size_item_even_if_shard_rejects
+=== RUN   TestShardProcessor/Unit/hasCapacity/should_deny_item_if_shard_rejects
+=== PAUSE TestShardProcessor/Unit/hasCapacity/should_deny_item_if_shard_rejects
+=== RUN   TestShardProcessor/Unit/hasCapacity/should_allow_item_if_shard_allows
+=== PAUSE TestShardProcessor/Unit/hasCapacity/should_allow_item_if_shard_allows
+=== CONT  TestShardProcessor/Unit/cleanup_and_utility_methods/should_process_all_queues_sequentially
+=== CONT  TestShardProcessor/Unit/cleanup_and_utility_methods/should_not_sweep_items_not_finalized
+=== RUN   TestShardProcessor/Unit/enqueue/should_reject_item_on_registry_queue_lookup_failure
+=== PAUSE TestShardProcessor/Unit/enqueue/should_reject_item_on_registry_queue_lookup_failure
+=== RUN   TestShardProcessor/Unit/enqueue/should_reject_item_on_registry_priority_band_lookup_failure
+=== PAUSE TestShardProcessor/Unit/enqueue/should_reject_item_on_registry_priority_band_lookup_failure
+=== RUN   TestShardProcessor/Unit/enqueue/should_reject_item_on_queue_add_failure
+=== PAUSE TestShardProcessor/Unit/enqueue/should_reject_item_on_queue_add_failure
+=== RUN   TestShardProcessor/Unit/enqueue/should_ignore_an_already-finalized_item
+=== PAUSE TestShardProcessor/Unit/enqueue/should_ignore_an_already-finalized_item
+=== CONT  TestShardProcessor/Unit/dispatchItem
+=== RUN   TestShardProcessor/Unit/dispatchItem/should_fail_on_registry_errors
+=== PAUSE TestShardProcessor/Unit/dispatchItem/should_fail_on_registry_errors
+=== RUN   TestShardProcessor/Unit/dispatchItem/should_not_dispatch_already_finalized_item
+=== PAUSE TestShardProcessor/Unit/dispatchItem/should_not_dispatch_already_finalized_item
+=== CONT  TestShardProcessor/Unit/dispatchCycle
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_guarantee_strict_priority_by_starving_lower_priority_items
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_guarantee_strict_priority_by_starving_lower_priority_items
+=== CONT  TestShardProcessor/Unit/hasCapacity/should_allow_zero-size_item_even_if_shard_rejects
+=== CONT  TestShardProcessor/Unit/enqueue/should_reject_item_on_registry_queue_lookup_failure
+=== CONT  TestShardProcessor/Unit/cleanup_and_utility_methods/should_evict_all_items_on_shutdown
+=== CONT  TestShardProcessor/Unit/cleanup_and_utility_methods/should_handle_registry_errors_gracefully_during_concurrent_processing
+=== CONT  TestShardProcessor/Public_API/SubmitOrBlock/should_unblock_and_return_context_error_on_cancellation
+=== CONT  TestShardProcessor/Public_API/SubmitOrBlock/should_block_when_channel_is_full_and_succeed_when_space_becomes_available
+=== CONT  TestShardProcessor/Public_API/SubmitOrBlock/should_reject_immediately_if_shutting_down
+=== CONT  TestShardProcessor/Unit/dispatchItem/should_fail_on_registry_errors
+=== RUN   TestShardProcessor/Unit/dispatchItem/should_fail_on_registry_errors/on_ManagedQueue_lookup_failure
+=== PAUSE TestShardProcessor/Unit/dispatchItem/should_fail_on_registry_errors/on_ManagedQueue_lookup_failure
+=== CONT  TestShardProcessor/Unit/hasCapacity/should_allow_item_if_shard_allows
+=== CONT  TestShardProcessor/Unit/enqueue/should_ignore_an_already-finalized_item
+=== CONT  TestShardProcessor/Unit/enqueue/should_reject_item_on_queue_add_failure
+=== CONT  TestShardProcessor/Unit/enqueue/should_reject_item_on_registry_priority_band_lookup_failure
+=== CONT  TestShardProcessor/Unit/hasCapacity/should_deny_item_if_shard_rejects
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_guarantee_strict_priority_by_starving_lower_priority_items
+=== CONT  TestShardProcessor/Unit/dispatchItem/should_not_dispatch_already_finalized_item
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_do_nothing_if_no_items_are_queued
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_do_nothing_if_no_items_are_queued
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_block_dispatch_on_HoL_saturation
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_block_dispatch_on_HoL_saturation
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_on_priority_band_accessor_error
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_on_priority_band_accessor_error
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_on_FairnessPolicy_error
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_on_FairnessPolicy_error
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_if_FairnessPolicy_policy_returns_no_queue
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_if_FairnessPolicy_policy_returns_no_queue
+=== CONT  TestShardProcessor/Unit/dispatchItem/should_fail_on_registry_errors/on_ManagedQueue_lookup_failure
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_if_selected_queue_is_empty
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_if_selected_queue_is_empty
+=== RUN   TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_continue_to_lower_priority_band_on_FairnessPolicy_policy_error
+=== PAUSE TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_continue_to_lower_priority_band_on_FairnessPolicy_policy_error
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_do_nothing_if_no_items_are_queued
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_on_FairnessPolicy_error
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_if_FairnessPolicy_policy_returns_no_queue
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_on_priority_band_accessor_error
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_block_dispatch_on_HoL_saturation
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_continue_to_lower_priority_band_on_FairnessPolicy_policy_error
+=== CONT  TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_if_selected_queue_is_empty
+--- PASS: TestShardProcessor (0.00s)
+    --- PASS: TestShardProcessor/Unit (0.00s)
+        --- PASS: TestShardProcessor/Unit/cleanup_and_utility_methods (0.00s)
+            --- PASS: TestShardProcessor/Unit/cleanup_and_utility_methods/should_sweep_externally_finalized_items (0.00s)
+            --- PASS: TestShardProcessor/Unit/cleanup_and_utility_methods/should_process_all_queues_sequentially (0.00s)
+            --- PASS: TestShardProcessor/Unit/cleanup_and_utility_methods/should_not_sweep_items_not_finalized (0.00s)
+            --- PASS: TestShardProcessor/Unit/cleanup_and_utility_methods/should_evict_all_items_on_shutdown (0.00s)
+            --- PASS: TestShardProcessor/Unit/cleanup_and_utility_methods/should_handle_registry_errors_gracefully_during_concurrent_processing (0.00s)
+        --- PASS: TestShardProcessor/Unit/enqueue (0.00s)
+            --- PASS: TestShardProcessor/Unit/enqueue/should_reject_item_on_registry_queue_lookup_failure (0.00s)
+            --- PASS: TestShardProcessor/Unit/enqueue/should_ignore_an_already-finalized_item (0.00s)
+            --- PASS: TestShardProcessor/Unit/enqueue/should_reject_item_on_queue_add_failure (0.00s)
+            --- PASS: TestShardProcessor/Unit/enqueue/should_reject_item_on_registry_priority_band_lookup_failure (0.00s)
+        --- PASS: TestShardProcessor/Unit/hasCapacity (0.00s)
+            --- PASS: TestShardProcessor/Unit/hasCapacity/should_allow_item_if_shard_allows (0.00s)
+            --- PASS: TestShardProcessor/Unit/hasCapacity/should_deny_item_if_shard_rejects (0.00s)
+            --- PASS: TestShardProcessor/Unit/hasCapacity/should_allow_zero-size_item_even_if_shard_rejects (0.00s)
+        --- PASS: TestShardProcessor/Unit/dispatchItem (0.00s)
+            --- PASS: TestShardProcessor/Unit/dispatchItem/should_fail_on_registry_errors (0.00s)
+                --- PASS: TestShardProcessor/Unit/dispatchItem/should_fail_on_registry_errors/on_ManagedQueue_lookup_failure (0.00s)
+            --- PASS: TestShardProcessor/Unit/dispatchItem/should_not_dispatch_already_finalized_item (0.00s)
+        --- PASS: TestShardProcessor/Unit/dispatchCycle (0.00s)
+            --- PASS: TestShardProcessor/Unit/dispatchCycle/should_guarantee_strict_priority_by_starving_lower_priority_items (0.00s)
+            --- PASS: TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios (0.00s)
+                --- PASS: TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_do_nothing_if_no_items_are_queued (0.00s)
+                --- PASS: TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_on_FairnessPolicy_error (0.00s)
+                --- PASS: TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_if_FairnessPolicy_policy_returns_no_queue (0.00s)
+                --- PASS: TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_on_priority_band_accessor_error (0.00s)
+                --- PASS: TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_block_dispatch_on_HoL_saturation (0.00s)
+                --- PASS: TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_skip_band_if_selected_queue_is_empty (0.00s)
+                --- PASS: TestShardProcessor/Unit/dispatchCycle/should_handle_various_policy_and_registry_scenarios/should_continue_to_lower_priority_band_on_FairnessPolicy_policy_error (0.00s)
+    --- PASS: TestShardProcessor/Public_API (0.00s)
+        --- PASS: TestShardProcessor/Public_API/Submit (0.00s)
+            --- PASS: TestShardProcessor/Public_API/Submit/should_return_ErrProcessorBusy_when_channel_is_full (0.00s)
+            --- PASS: TestShardProcessor/Public_API/Submit/should_return_ErrFlowControllerNotRunning_if_lifecycleCtx_is_cancelled (0.00s)
+        --- PASS: TestShardProcessor/Public_API/SubmitOrBlock (0.00s)
+            --- PASS: TestShardProcessor/Public_API/SubmitOrBlock/should_reject_immediately_if_shutting_down (0.00s)
+            --- PASS: TestShardProcessor/Public_API/SubmitOrBlock/should_unblock_and_return_context_error_on_cancellation (0.02s)
+            --- PASS: TestShardProcessor/Public_API/SubmitOrBlock/should_block_when_channel_is_full_and_succeed_when_space_becomes_available (0.02s)
+    --- PASS: TestShardProcessor/Integration (0.00s)
+        --- PASS: TestShardProcessor/Integration/should_evict_a_queued_item_on_shutdown (0.00s)
+        --- PASS: TestShardProcessor/Integration/should_reject_item_if_enqueued_during_shutdown (0.00s)
+        --- PASS: TestShardProcessor/Integration/should_reject_item_when_at_capacity (0.00s)
+        --- PASS: TestShardProcessor/Integration/should_shut_down_cleanly_on_context_cancellation (0.00s)
+        --- PASS: TestShardProcessor/Integration/should_reject_item_on_registry_lookup_failure (0.00s)
+        --- PASS: TestShardProcessor/Integration/should_handle_concurrent_enqueues_and_dispatch_all_items (0.00s)
+        --- PASS: TestShardProcessor/Integration/should_dispatch_item_successfully (0.00s)
+        --- PASS: TestShardProcessor/Integration/should_guarantee_exactly-once_finalization_during_dispatch_vs._expiry_race (0.01s)
+        --- PASS: TestShardProcessor/Integration/should_not_panic_on_nil_item_from_enqueue_channel (0.05s)
+PASS
+ok  	sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/controller/internal	0.148s
+=== RUN   TestGlobalStrict_Name
+=== PAUSE TestGlobalStrict_Name
+=== RUN   TestGlobalStrict_Pick
+=== PAUSE TestGlobalStrict_Pick
+=== RUN   TestFairnessPolicyConformance
+=== PAUSE TestFairnessPolicyConformance
+=== RUN   TestRoundRobin_Name
+=== PAUSE TestRoundRobin_Name
+=== RUN   TestRoundRobin_Pick_Logic
+=== PAUSE TestRoundRobin_Pick_Logic
+=== RUN   TestRoundRobin_Pick_SkipsEmptyQueues
+=== PAUSE TestRoundRobin_Pick_SkipsEmptyQueues
+=== RUN   TestRoundRobin_Pick_HandlesDynamicFlows
+=== PAUSE TestRoundRobin_Pick_HandlesDynamicFlows
+=== RUN   TestRoundRobin_Pick_Concurrency
+=== PAUSE TestRoundRobin_Pick_Concurrency
+=== CONT  TestGlobalStrict_Name
+=== CONT  TestRoundRobin_Pick_Logic
+--- PASS: TestRoundRobin_Pick_Logic (0.00s)
+=== CONT  TestRoundRobin_Pick_Concurrency
+=== RUN   TestRoundRobin_Pick_Concurrency/Iteration0
+=== PAUSE TestRoundRobin_Pick_Concurrency/Iteration0
+=== RUN   TestRoundRobin_Pick_Concurrency/Iteration1
+=== PAUSE TestRoundRobin_Pick_Concurrency/Iteration1
+=== RUN   TestRoundRobin_Pick_Concurrency/Iteration2
+=== PAUSE TestRoundRobin_Pick_Concurrency/Iteration2
+=== RUN   TestRoundRobin_Pick_Concurrency/Iteration3
+=== PAUSE TestRoundRobin_Pick_Concurrency/Iteration3
+=== RUN   TestRoundRobin_Pick_Concurrency/Iteration4
+=== PAUSE TestRoundRobin_Pick_Concurrency/Iteration4
+=== CONT  TestRoundRobin_Pick_Concurrency/Iteration0
+=== CONT  TestFairnessPolicyConformance
+    functional_test.go:40: No plugins registered. Skipping conformance tests.
+=== CONT  TestGlobalStrict_Pick
+=== RUN   TestGlobalStrict_Pick/BasicSelection_TwoQueues
+=== PAUSE TestGlobalStrict_Pick/BasicSelection_TwoQueues
+=== RUN   TestGlobalStrict_Pick/IgnoresEmptyQueues
+=== PAUSE TestGlobalStrict_Pick/IgnoresEmptyQueues
+=== RUN   TestGlobalStrict_Pick/SingleNonEmptyQueue
+=== PAUSE TestGlobalStrict_Pick/SingleNonEmptyQueue
+=== RUN   TestGlobalStrict_Pick/OrderingPolicyCompatibility
+=== PAUSE TestGlobalStrict_Pick/OrderingPolicyCompatibility
+=== RUN   TestGlobalStrict_Pick/OrderingPolicyIsNil
+=== PAUSE TestGlobalStrict_Pick/OrderingPolicyIsNil
+=== RUN   TestGlobalStrict_Pick/AllQueuesEmpty
+=== PAUSE TestGlobalStrict_Pick/AllQueuesEmpty
+=== RUN   TestGlobalStrict_Pick/NilBand
+=== PAUSE TestGlobalStrict_Pick/NilBand
+=== CONT  TestRoundRobin_Name
+=== CONT  TestGlobalStrict_Pick/BasicSelection_TwoQueues
+=== CONT  TestGlobalStrict_Pick/OrderingPolicyIsNil
+=== CONT  TestRoundRobin_Pick_Concurrency/Iteration4
+=== CONT  TestRoundRobin_Pick_HandlesDynamicFlows
+    roundrobin_test.go:167: 
+        	Error Trace:	/usr/local/google/home/lukevandrie/Code/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/fairness/roundrobin_test.go:167
+        	Error:      	Received unexpected error:
+        	            	invalid state type for RoundRobin policy: expected *roundRobinCursor, got <nil>
+        	Test:       	TestRoundRobin_Pick_HandlesDynamicFlows
+        	Messages:   	Pick should not error after adding a flow
+=== CONT  TestRoundRobin_Pick_SkipsEmptyQueues
+=== CONT  TestGlobalStrict_Pick/NilBand
+=== CONT  TestGlobalStrict_Pick/AllQueuesEmpty
+=== CONT  TestGlobalStrict_Pick/SingleNonEmptyQueue
+=== CONT  TestGlobalStrict_Pick/OrderingPolicyCompatibility
+=== CONT  TestGlobalStrict_Pick/IgnoresEmptyQueues
+=== NAME  TestRoundRobin_Pick_Concurrency/Iteration4
+    roundrobin_test.go:259: Selection distribution: flow2: 100, flow3: 100, flow1: 100, 
+=== CONT  TestRoundRobin_Pick_Concurrency/Iteration2
+=== CONT  TestRoundRobin_Pick_Concurrency/Iteration3
+=== NAME  TestRoundRobin_Pick_Concurrency/Iteration2
+    roundrobin_test.go:259: Selection distribution: flow2: 100, flow3: 100, flow1: 100, 
+=== NAME  TestRoundRobin_Pick_Concurrency/Iteration0
+    roundrobin_test.go:259: Selection distribution: flow1: 100, flow2: 100, flow3: 100, 
+--- PASS: TestGlobalStrict_Name (0.00s)
+=== NAME  TestRoundRobin_Pick_Concurrency/Iteration3
+    roundrobin_test.go:259: Selection distribution: flow3: 100, flow2: 100, flow1: 100, 
+=== CONT  TestRoundRobin_Pick_Concurrency/Iteration1
+--- PASS: TestFairnessPolicyConformance (0.00s)
+--- PASS: TestRoundRobin_Name (0.00s)
+--- FAIL: TestRoundRobin_Pick_HandlesDynamicFlows (0.00s)
+--- PASS: TestRoundRobin_Pick_SkipsEmptyQueues (0.00s)
+--- PASS: TestGlobalStrict_Pick (0.00s)
+    --- PASS: TestGlobalStrict_Pick/BasicSelection_TwoQueues (0.00s)
+    --- PASS: TestGlobalStrict_Pick/NilBand (0.00s)
+    --- PASS: TestGlobalStrict_Pick/AllQueuesEmpty (0.00s)
+    --- PASS: TestGlobalStrict_Pick/SingleNonEmptyQueue (0.00s)
+    --- PASS: TestGlobalStrict_Pick/OrderingPolicyCompatibility (0.00s)
+    --- PASS: TestGlobalStrict_Pick/IgnoresEmptyQueues (0.00s)
+    --- PASS: TestGlobalStrict_Pick/OrderingPolicyIsNil (0.00s)
+=== NAME  TestRoundRobin_Pick_Concurrency/Iteration1
+    roundrobin_test.go:259: Selection distribution: flow2: 100, flow1: 100, flow3: 100, 
+--- PASS: TestRoundRobin_Pick_Concurrency (0.00s)
+    --- PASS: TestRoundRobin_Pick_Concurrency/Iteration4 (0.00s)
+    --- PASS: TestRoundRobin_Pick_Concurrency/Iteration2 (0.00s)
+    --- PASS: TestRoundRobin_Pick_Concurrency/Iteration0 (0.01s)
+    --- PASS: TestRoundRobin_Pick_Concurrency/Iteration3 (0.00s)
+    --- PASS: TestRoundRobin_Pick_Concurrency/Iteration1 (0.00s)
+FAIL
+FAIL	sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/framework/plugins/fairness	0.150s
+FAIL
