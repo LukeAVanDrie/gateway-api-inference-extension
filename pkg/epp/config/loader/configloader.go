@@ -30,13 +30,13 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/config"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/datalayer"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/flowcontrol/contracts"
 	fwkdl "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/datalayer"
 	fwkplugin "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/plugin"
 	fwkrh "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/requesthandling"
 	framework "sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/interface/scheduling"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/profile"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/handlers"
-	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector/framework/plugins/utilizationdetector"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/scheduling"
 )
 
@@ -123,17 +123,27 @@ func InstantiateAndConfigure(
 		}
 	}
 
+	var saturationDetector contracts.SaturationDetector
+	if rawConfig.FlowControl != nil && rawConfig.FlowControl.SaturationDetectorRef != "" {
+		plugin := handle.Plugin(rawConfig.FlowControl.SaturationDetectorRef)
+		var ok bool
+		saturationDetector, ok = plugin.(contracts.SaturationDetector)
+		if !ok {
+			return nil, fmt.Errorf("plugin %q does not implement contracts.SaturationDetector", rawConfig.FlowControl.SaturationDetectorRef)
+		}
+	}
+
 	parserConfig, err := buildParserConfig(rawConfig.Parser, handle)
 	if err != nil {
 		return nil, fmt.Errorf("parse config build failed: %w", err)
 	}
 
 	return &config.Config{
-		SchedulerConfig:          schedulerConfig,
-		SaturationDetectorConfig: buildSaturationConfig(rawConfig.SaturationDetector),
-		DataConfig:               dataConfig,
-		FlowControlConfig:        flowControlConfig,
-		ParserConfig:             parserConfig,
+		SchedulerConfig:    schedulerConfig,
+		DataConfig:         dataConfig,
+		FlowControlConfig:  flowControlConfig,
+		ParserConfig:       parserConfig,
+		SaturationDetector: saturationDetector,
 	}, nil
 }
 
@@ -237,28 +247,6 @@ func loadFeatureConfig(gates configapi.FeatureGates) map[string]bool {
 		config[gate] = true
 	}
 	return config
-}
-
-func buildSaturationConfig(apiConfig *configapi.SaturationDetector) *utilizationdetector.Config {
-	cfg := &utilizationdetector.Config{
-		QueueDepthThreshold:       utilizationdetector.DefaultQueueDepthThreshold,
-		KVCacheUtilThreshold:      utilizationdetector.DefaultKVCacheUtilThreshold,
-		MetricsStalenessThreshold: utilizationdetector.DefaultMetricsStalenessThreshold,
-	}
-
-	if apiConfig != nil {
-		if apiConfig.QueueDepthThreshold > 0 {
-			cfg.QueueDepthThreshold = apiConfig.QueueDepthThreshold
-		}
-		if apiConfig.KVCacheUtilThreshold > 0.0 && apiConfig.KVCacheUtilThreshold < 1.0 {
-			cfg.KVCacheUtilThreshold = apiConfig.KVCacheUtilThreshold
-		}
-		if apiConfig.MetricsStalenessThreshold.Duration > 0 {
-			cfg.MetricsStalenessThreshold = apiConfig.MetricsStalenessThreshold.Duration
-		}
-	}
-
-	return cfg
 }
 
 func buildParserConfig(rawParserConfig *configapi.ParserConfig, handle fwkplugin.Handle) (*handlers.Config, error) {

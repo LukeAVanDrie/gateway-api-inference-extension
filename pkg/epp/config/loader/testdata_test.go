@@ -45,10 +45,6 @@ schedulingProfiles:
 featureGates:
 - dataLayer
 - flowControl
-saturationDetector:
-  queueDepthThreshold: 10
-  kvCacheUtilThreshold: 0.8
-  metricsStalenessThreshold: 100ms
 `
 
 // successNoProfilesText represents a valid config with plugins but no profiles.

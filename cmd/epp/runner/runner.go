@@ -331,11 +331,10 @@ func (r *Runner) setup(ctx context.Context, cfg *rest.Config, opts *runserver.Op
 		return nil, nil, err
 	}
 
-	saturationDetector := utilizationdetector.NewDetector(
-		utilizationdetector.UtilizationDetectorType,
-		*eppConfig.SaturationDetectorConfig,
-		setupLog,
-	)
+	saturationDetector := eppConfig.SaturationDetector
+	if saturationDetector == nil {
+		return nil, nil, errors.New("saturation detector plugin not found in config")
+	}
 
 	// --- Admission Control Initialization ---
 	var admissionController requestcontrol.AdmissionController
@@ -564,8 +563,6 @@ func (r *Runner) parseConfigurationPhaseTwo(ctx context.Context, rawConfig *conf
 	// The plugins will be executed in topologically sorted order to ensure that data is produced before it is consumed.
 	r.requestControlConfig.OrderPrepareDataPlugins(dag)
 
-	r.applyDeprecatedSaturationConfig(cfg)
-
 	r.parser = handlers.NewParser(cfg.ParserConfig)
 	logger.Info("loaded configuration from file/text successfully")
 
@@ -580,31 +577,6 @@ func applyDeprecatedEnvFeatureGate(envVar, featureName, featureGate string, rawC
 				rawConfig.FeatureGates = make(configapi.FeatureGates, 0)
 			}
 			rawConfig.FeatureGates = append(rawConfig.FeatureGates, featureGate)
-		}
-	}
-}
-
-func (r *Runner) applyDeprecatedSaturationConfig(cfg *config.Config) {
-	if _, ok := os.LookupEnv(EnvSdQueueDepthThreshold); ok {
-		setupLog.Info("Configuring Saturation Detector using environment variables is deprecated and will be removed in next version")
-		cfg.SaturationDetectorConfig.QueueDepthThreshold =
-			env.GetEnvInt(EnvSdQueueDepthThreshold, utilizationdetector.DefaultQueueDepthThreshold, setupLog)
-		if cfg.SaturationDetectorConfig.QueueDepthThreshold <= 0 {
-			cfg.SaturationDetectorConfig.QueueDepthThreshold = utilizationdetector.DefaultQueueDepthThreshold
-		}
-	}
-	if _, ok := os.LookupEnv(EnvSdKVCacheUtilThreshold); ok {
-		setupLog.Info("Configuring Saturation Detector using environment variables is deprecated and will be removed in next version")
-		cfg.SaturationDetectorConfig.KVCacheUtilThreshold = env.GetEnvFloat(EnvSdKVCacheUtilThreshold, utilizationdetector.DefaultKVCacheUtilThreshold, setupLog)
-		if cfg.SaturationDetectorConfig.KVCacheUtilThreshold <= 0 || cfg.SaturationDetectorConfig.KVCacheUtilThreshold >= 1 {
-			cfg.SaturationDetectorConfig.KVCacheUtilThreshold = utilizationdetector.DefaultKVCacheUtilThreshold
-		}
-	}
-	if _, ok := os.LookupEnv(EnvSdMetricsStalenessThreshold); ok {
-		setupLog.Info("Configuring Saturation Detector using environment variables is deprecated and will be removed in next version")
-		cfg.SaturationDetectorConfig.MetricsStalenessThreshold = env.GetEnvDuration(EnvSdMetricsStalenessThreshold, utilizationdetector.DefaultMetricsStalenessThreshold, setupLog)
-		if cfg.SaturationDetectorConfig.MetricsStalenessThreshold <= 0 {
-			cfg.SaturationDetectorConfig.MetricsStalenessThreshold = utilizationdetector.DefaultMetricsStalenessThreshold
 		}
 	}
 }

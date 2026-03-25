@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/kvcacheutilization"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/prefix"
 	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/framework/plugins/scheduling/scorer/queuedepth"
+	"sigs.k8s.io/gateway-api-inference-extension/pkg/epp/saturationdetector/framework/plugins/utilizationdetector"
 )
 
 // DefaultScorerWeight is the weight used for scorers referenced in the configuration without explicit weights.
@@ -100,6 +101,9 @@ func applyStaticDefaults(cfg *configapi.EndpointPickerConfig) {
 // system graph is complete.
 func applySystemDefaults(cfg *configapi.EndpointPickerConfig, handle fwkplugin.Handle) error {
 	allPlugins := handle.GetAllPluginsWithNames()
+	if err := ensureSaturationDetector(cfg, handle, allPlugins); err != nil {
+		return fmt.Errorf("failed to apply saturation detector default: %w", err)
+	}
 	if err := ensureSchedulingLayer(cfg, handle, allPlugins); err != nil {
 		return fmt.Errorf("failed to apply scheduling system defaults: %w", err)
 	}
@@ -203,6 +207,33 @@ func ensureFlowControlLayer(
 	if _, ok := allPlugins[registry.DefaultFairnessPolicyRef]; !ok {
 		return registerDefaultPlugin(cfg, handle, registry.DefaultFairnessPolicyRef)
 	}
+	return nil
+}
+
+// ensureSaturationDetector guarantees that a saturation detector is configured and set in FlowControl layer.
+func ensureSaturationDetector(
+	cfg *configapi.EndpointPickerConfig,
+	handle fwkplugin.Handle,
+	allPlugins map[string]fwkplugin.Plugin,
+) error {
+	var ref string
+	if cfg.FlowControl != nil && cfg.FlowControl.SaturationDetectorRef != "" {
+		ref = cfg.FlowControl.SaturationDetectorRef
+	} else {
+		ref = utilizationdetector.UtilizationDetectorType
+	}
+
+	if _, ok := allPlugins[ref]; !ok {
+		if err := registerDefaultPlugin(cfg, handle, ref); err != nil {
+			return err
+		}
+	}
+
+	if cfg.FlowControl == nil {
+		cfg.FlowControl = &configapi.FlowControlConfig{}
+	}
+	cfg.FlowControl.SaturationDetectorRef = ref
+
 	return nil
 }
 

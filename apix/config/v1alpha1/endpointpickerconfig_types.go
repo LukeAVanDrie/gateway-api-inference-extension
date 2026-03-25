@@ -50,11 +50,6 @@ type EndpointPickerConfig struct {
 	SchedulingProfiles []SchedulingProfile `json:"schedulingProfiles"`
 
 	// +optional
-	// SaturationDetector when present specifies the configuration of the
-	// Saturation detector. If not present, default values are used.
-	SaturationDetector *SaturationDetector `json:"saturationDetector,omitempty"`
-
-	// +optional
 	// Data configures the DataLayer. It is required if the new DataLayer is enabled.
 	Data *DataLayerConfig `json:"data"`
 
@@ -82,9 +77,6 @@ func (cfg EndpointPickerConfig) String() string {
 	}
 	if cfg.Data != nil {
 		parts = append(parts, fmt.Sprintf("Data: %v", cfg.Data))
-	}
-	if cfg.SaturationDetector != nil {
-		parts = append(parts, fmt.Sprintf("SaturationDetector: %v", cfg.SaturationDetector))
 	}
 	if cfg.FlowControl != nil {
 		parts = append(parts, fmt.Sprintf("FlowControl: %v", cfg.FlowControl))
@@ -195,43 +187,6 @@ func (fg FeatureGates) String() string {
 	return "{" + result + "}"
 }
 
-// SaturationDetector
-type SaturationDetector struct {
-	// +optional
-	// QueueDepthThreshold defines the backend waiting queue size above which a
-	// pod is considered to have insufficient capacity for new requests.
-	QueueDepthThreshold int `json:"queueDepthThreshold,omitempty"`
-
-	// +optional
-	// KVCacheUtilThreshold defines the KV cache utilization (0.0 to 1.0) above
-	// which a pod is considered to have insufficient capacity.
-	KVCacheUtilThreshold float64 `json:"kvCacheUtilThreshold,omitempty"`
-
-	// +optional
-	// MetricsStalenessThreshold defines how old a pod's metrics can be.
-	// If a pod's metrics are older than this, it might be excluded from
-	// "good capacity" considerations or treated as having no capacity for
-	// safety.
-	MetricsStalenessThreshold metav1.Duration `json:"metricsStalenessThreshold,omitempty"`
-}
-
-func (sd *SaturationDetector) String() string {
-	if sd == nil {
-		return nilString
-	}
-	var parts []string
-	if sd.QueueDepthThreshold != 0 {
-		parts = append(parts, fmt.Sprintf("QueueDepthThreshold: %d", sd.QueueDepthThreshold))
-	}
-	if sd.KVCacheUtilThreshold != 0.0 {
-		parts = append(parts, fmt.Sprintf("KVCacheUtilThreshold: %.2f", sd.KVCacheUtilThreshold))
-	}
-	if sd.MetricsStalenessThreshold.Duration != 0 {
-		parts = append(parts, fmt.Sprintf("MetricsStalenessThreshold: %s", sd.MetricsStalenessThreshold.Duration))
-	}
-	return "{" + strings.Join(parts, ", ") + "}"
-}
-
 // DataLayerConfig contains the configuration of the DataLayer feature
 type DataLayerConfig struct {
 	// +required
@@ -335,6 +290,12 @@ type FlowControlConfig struct {
 	// priority levels. Traffic matching these priorities will be handled according to these rules.
 	// If a priority band is not specified, it uses specific defaults.
 	PriorityBands []PriorityBandConfig `json:"priorityBands,omitempty"`
+
+	// +optional
+	// SaturationDetectorRef specifies the name of the plugin instance to use for saturation detection.
+	// The reference is to the name of an entry of the Plugins defined in the configuration's Plugins section.
+	// If unspecified, "utilization-detector" is used by default.
+	SaturationDetectorRef string `json:"saturationDetectorRef,omitempty"`
 }
 
 func (fcc *FlowControlConfig) String() string {
@@ -343,8 +304,13 @@ func (fcc *FlowControlConfig) String() string {
 	}
 
 	var parts []string
+
+	if fcc.SaturationDetectorRef != "" {
+		parts = append(parts, "SaturationDetectorRef: "+fcc.SaturationDetectorRef)
+	}
+
 	if fcc.MaxBytes != nil {
-		parts = append(parts, fmt.Sprintf("MaxBytes: %d", fcc.MaxBytes.Value()))
+		parts = append(parts, "MaxBytes: "+fcc.MaxBytes.String())
 	} else {
 		parts = append(parts, "MaxBytes: unlimited")
 	}
