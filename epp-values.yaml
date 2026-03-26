@@ -1,0 +1,35 @@
+inferenceExtension:
+  pluginsCustomConfig:
+    custom-plugins.yaml: |
+      apiVersion: inference.networking.x-k8s.io/v1alpha1
+      kind: EndpointPickerConfig
+      plugins:
+      - type: queue-scorer
+      - type: kv-cache-utilization-scorer
+      - type: round-robin-fairness-policy
+        name: common-round-robin
+      - type: concurrency-detector
+        name: concurrency-detector
+        parameters:
+          maxConcurrency: 15
+      schedulingProfiles:
+      - name: default
+        plugins:
+        - pluginRef: queue-scorer
+          weight: 2
+        - pluginRef: kv-cache-utilization-scorer
+          weight: 2
+      featureGates:
+      - flowControl
+      flowControl:
+        saturationDetectorRef: concurrency-detector
+        defaultRequestTTL: 60s
+        defaultPriorityBand:
+          fairnessPolicyRef: common-round-robin
+        priorityBands:
+        - priority: 1
+          fairnessPolicyRef: common-round-robin
+        - priority: 0
+          fairnessPolicyRef: common-round-robin
+        - priority: -1
+          fairnessPolicyRef: common-round-robin

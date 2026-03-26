@@ -2122,6 +2122,669 @@
       ],
       "title": "Body Based Router",
       "type": "row"
+    },
+    {
+      "id": 31,
+      "type": "row",
+      "title": "Flow Control Layer",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 7
+      },
+      "panels": [
+        {
+          "id": 24,
+          "title": "Pool Saturation",
+          "description": "Current saturation of the underlying inference pool. When this hits the threshold, Flow Control backpressure activates.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "max by(inference_pool) (inference_extension_flow_control_pool_saturation)",
+              "legendFormat": "{{inference_pool}}",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10
+              },
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1.2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1.0
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 25,
+          "title": "Net Flow (System Stability Derivative)",
+          "description": "Leading indicator for Autoscalers. Above 0 = System demand exceeds supply; Queue is growing.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "sum(deriv(inference_extension_flow_control_queue_size[$__rate_interval]))",
+              "legendFormat": "Net Flow (Req/sec change)",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "list",
+              "placement": "right"
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "text"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 0.01
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 26,
+          "title": "Arrival Rate (The Demand)",
+          "description": "Incoming HTTP request rate from clients. Shows exactly who is asking for capacity.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_enqueue_duration_seconds_count[$__rate_interval])) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_enqueue_duration_seconds_count[$__range])))",
+              "legendFormat": "P{{priority}} - {{fairness_id}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(inference_extension_flow_control_request_enqueue_duration_seconds_count[$__rate_interval])) - sum(sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_enqueue_duration_seconds_count[$__rate_interval])) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_enqueue_duration_seconds_count[$__range]))))",
+              "legendFormat": "Other",
+              "refId": "B"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 80,
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "^Other$"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#8E8E90",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 27,
+          "title": "Active Queue Depth (The Buffer)",
+          "description": "Count of requests currently held in EPP memory, waiting for pool capacity.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (priority, fairness_id) (inference_extension_flow_control_queue_size) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (max_over_time(inference_extension_flow_control_queue_size[$__range])))",
+              "legendFormat": "P{{priority}} - {{fairness_id}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(inference_extension_flow_control_queue_size) - sum(sum by (priority, fairness_id) (inference_extension_flow_control_queue_size) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (max_over_time(inference_extension_flow_control_queue_size[$__range]))))",
+              "legendFormat": "Other",
+              "refId": "B"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0,
+              "decimals": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 80,
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "^Other$"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#8E8E90",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 32,
+          "title": "Active Queue Mass (Physical Footprint)",
+          "description": "Total HTTP payload size held in EPP memory. Exposes 'Resource Asymmetry' where low-RPS / huge-context requests consume host capacity.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (priority, fairness_id) (inference_extension_flow_control_queue_bytes) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (max_over_time(inference_extension_flow_control_queue_bytes[$__range])))",
+              "legendFormat": "P{{priority}} - {{fairness_id}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(inference_extension_flow_control_queue_bytes) - sum(sum by (priority, fairness_id) (inference_extension_flow_control_queue_bytes) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (max_over_time(inference_extension_flow_control_queue_bytes[$__range]))))",
+              "legendFormat": "Other",
+              "refId": "B"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0,
+              "unit": "bytes",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 80,
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "^Other$"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#8E8E90",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 28,
+          "title": "Flow Controller Outcomes (The Supply)",
+          "description": "How the EPP resolves the queue: Dispatched vs. Rejected / Evicted.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (priority, fairness_id, outcome) (rate(inference_extension_flow_control_request_queue_duration_seconds_count[$__rate_interval])) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_queue_duration_seconds_count[$__range])))",
+              "legendFormat": "P{{priority}} - {{fairness_id}} - {{outcome}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum by (outcome) (rate(inference_extension_flow_control_request_queue_duration_seconds_count[$__rate_interval])) - sum by (outcome) (sum by (priority, fairness_id, outcome) (rate(inference_extension_flow_control_request_queue_duration_seconds_count[$__rate_interval])) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_queue_duration_seconds_count[$__range]))))",
+              "legendFormat": "Other - {{outcome}}",
+              "refId": "B"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ]
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 80,
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "^Other.*"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#8E8E90",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*Evicted.*"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#F2495C",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillPattern",
+                    "value": "diagonalRight"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": ".*Rejected.*"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#E02F44",
+                      "mode": "fixed"
+                    }
+                  },
+                  {
+                    "id": "custom.fillPattern",
+                    "value": "crosshatch"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": 29,
+          "title": "99th% Wait Time by Flow (The UX)",
+          "description": "The delay lower priorities suffer while high priority traffic skips to the front of the queue.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 16
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (priority, fairness_id, le) (rate(inference_extension_flow_control_request_queue_duration_seconds_bucket[$__rate_interval]))) > 0 and on(priority, fairness_id) sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_enqueue_duration_seconds_count[$__rate_interval])) > 0.05",
+              "legendFormat": "P{{priority}} - {{fairness_id}}",
+              "refId": "A"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "max",
+                "lastNotNull"
+              ]
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0,
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10,
+                "stacking": {
+                  "mode": "none"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": 30,
+          "title": "Internal Controller Latency (P99 Microseconds)",
+          "description": "Measures internal Flow Control logic execution time to ensure proxy overhead remains near zero.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 16
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(inference_extension_flow_control_dispatch_cycle_duration_seconds_bucket[$__rate_interval]))) > 0",
+              "legendFormat": "Dispatch Cycle P99",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(inference_extension_flow_control_request_enqueue_duration_seconds_bucket[$__rate_interval]))) > 0",
+              "legendFormat": "Enqueue P99",
+              "refId": "B"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "max",
+                "lastNotNull"
+              ]
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0,
+              "unit": "s",
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 10
+              }
+            }
+          }
+        },
+        {
+          "id": 33,
+          "title": "Intra-Priority Fairness (Dispatch Rate)",
+          "description": "Shows competing flows at the exact same priority level converging to equal dispatch rates under contention.",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 16
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "targets": [
+            {
+              "expr": "sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_queue_duration_seconds_count{outcome=\"Dispatched\"}[$__rate_interval])) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_queue_duration_seconds_count{outcome=\"Dispatched\"}[$__range])))",
+              "legendFormat": "P{{priority}} - {{fairness_id}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(inference_extension_flow_control_request_queue_duration_seconds_count{outcome=\"Dispatched\"}[$__rate_interval])) - sum(sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_queue_duration_seconds_count{outcome=\"Dispatched\"}[$__rate_interval])) and on(priority, fairness_id) topk(10, sum by (priority, fairness_id) (rate(inference_extension_flow_control_request_queue_duration_seconds_count{outcome=\"Dispatched\"}[$__range]))))",
+              "legendFormat": "Other",
+              "refId": "B"
+            }
+          ],
+          "options": {
+            "tooltip": {
+              "mode": "multi",
+              "sort": 2
+            },
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "max",
+                "lastNotNull"
+              ]
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0,
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "stacking": {
+                  "mode": "none"
+                }
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byRegexp",
+                  "options": "^Other$"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "fixedColor": "#8E8E90",
+                      "mode": "fixed"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
     }
   ],
   "refresh": false,

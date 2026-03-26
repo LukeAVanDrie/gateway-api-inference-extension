@@ -14,9 +14,9 @@ extraScrapeConfigs: |
       - source_labels: [__meta_kubernetes_service_name]
         action: keep
         regex: .*-epp$
-      - source_labels: [__meta_kubernetes_pod_container_port_number]
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
         action: keep
-        regex: "9090"
+        regex: http-metrics
   - job_name: vllm
     scrape_interval: 5s   
     kubernetes_sd_configs:

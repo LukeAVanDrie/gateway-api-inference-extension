@@ -415,7 +415,7 @@ var (
 				0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1,
 			},
 		},
-		[]string{"priority", "outcome"},
+		[]string{"fairness_id", "priority", "outcome"},
 	)
 
 	flowControlQueueSize = prometheus.NewGaugeVec(
@@ -850,13 +850,13 @@ func RecordFlowControlDispatchCycleDuration(duration time.Duration) {
 	flowControlDispatchCycleDuration.WithLabelValues().Observe(duration.Seconds())
 }
 
-// RecordFlowControlRequestQueueDuration records the duration a request was in the enqueuing process in the Flow Control layer.
+// RecordFlowControlRequestEnqueueDuration records the duration a request was in the enqueuing process in the Flow Control layer.
 func RecordFlowControlRequestEnqueueDuration(
-	priority string, outcome string,
+	fairnessID string, priority string, outcome string,
 	duration time.Duration,
 ) {
 	flowControlRequestEnqueueDuration.WithLabelValues(
-		priority, outcome,
+		fairnessID, priority, outcome,
 	).Observe(duration.Seconds())
 }
 
